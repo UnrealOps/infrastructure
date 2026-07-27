@@ -1,0 +1,36 @@
+# Terraform/OpenTofu providers, state, plans, and local inputs
+*tfstate*
+.terraform/
+**/.terraform/
+# Dependency locks are generated locally and are not published with modules or examples.
+**/.terraform.lock.hcl
+.terraform.lock.*
+.terraform-plugin-cache/
+*.tfvars
+!*.tfvars.example
+*.tfplan
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Generated dependency and test artifacts
+coverage.out
+test-results/
+
+# Certificates and VPN profiles
+certs
+*.ovpn
+pki/
+kubeconfig
+kubeconfig.*
+*.kubeconfig
+
+# Local runtime data
+data
+volumes
+
+# Zip and Tar files
+*.zip
+*.tgz

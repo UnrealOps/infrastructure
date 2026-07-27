@@ -1,0 +1,115 @@
+name: AWS acceptance
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 7 1 * *"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  acceptance:
+    if: vars.AWS_ACCEPTANCE_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    environment: acceptance-${{ matrix.engine }}
+    concurrency:
+      group: unrealops-acceptance
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        engine: [tofu, terraform]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: opentofu/setup-opentofu@9d84900f3238fab8cd84ce47d658d25dd008be2f # v1.0.8
+        if: matrix.engine == 'tofu'
+        with:
+          tofu_version: 1.11.5
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        if: matrix.engine == 'terraform'
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+      - uses: terraform-linters/setup-tflint@ae78205cfffec9e8d93fd2b3115c7e9d3166d4b6 # v5.0.0
+        with:
+          tflint_version: v0.60.0
+      - uses: Azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
+        with:
+          version: v1.36.0
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.72.0
+          cache: false
+      - name: Install system prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes \
+            ca-certificates \
+            coreutils \
+            curl \
+            jq \
+            libcap2-bin \
+            make \
+            openvpn \
+            openssl \
+            tar \
+            unzip
+
+          aws_cli_version=2.36.8
+          aws_cli_sha256=829a2bbad5b4821a8d006a133c34fa5ce2f362ae003ac39aa0865a6d1e1711f2
+          aws_cli_archive="$RUNNER_TEMP/awscliv2.zip"
+          curl --fail --silent --show-error --location \
+            "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${aws_cli_version}.zip" \
+            --output "$aws_cli_archive"
+          echo "${aws_cli_sha256}  ${aws_cli_archive}" | sha256sum --check --strict
+          unzip -q "$aws_cli_archive" -d "$RUNNER_TEMP/aws-cli-installer"
+          mkdir -p "$RUNNER_TEMP/aws-bin"
+          "$RUNNER_TEMP/aws-cli-installer/aws/install" \
+            --install-dir "$RUNNER_TEMP/aws-cli" \
+            --bin-dir "$RUNNER_TEMP/aws-bin"
+          echo "$RUNNER_TEMP/aws-bin" >>"$GITHUB_PATH"
+
+          sudo modprobe tun
+          sudo chmod 0666 /dev/net/tun
+          sudo setcap cap_net_admin,cap_net_raw+ep "$(command -v openvpn)"
+      - name: Initialize and verify prerequisites
+        run: |
+          set -euo pipefail
+          tflint --init
+          for command in aws "${{ matrix.engine }}" go kubectl openvpn curl jq openssl \
+            tar make tflint trivy sha256sum; do
+            command -v "$command"
+          done
+      - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5.1.1
+        with:
+          role-to-assume: ${{ vars.AWS_ACCEPTANCE_ROLE_ARN }}
+          role-duration-seconds: 10800
+          aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+          allowed-account-ids: ${{ vars.AWS_ACCEPTANCE_ACCOUNT_ID }}
+      - name: Run guarded billable acceptance suite
+        env:
+          ACCEPTANCE_ACCOUNT_ID: ${{ vars.AWS_ACCEPTANCE_ACCOUNT_ID }}
+          ACCEPTANCE_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}
+          ENGINE: ${{ matrix.engine }}
+        run: |
+          set -euo pipefail
+          run_id="$(
+            printf '%s' "${ENGINE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" |
+              sha256sum |
+              cut -c1-12
+          )"
+          .agents/skills/test-unrealops-infrastructure/scripts/run-acceptance.sh \
+            --engine "$ENGINE" \
+            --account-id "$ACCEPTANCE_ACCOUNT_ID" \
+            --region "$ACCEPTANCE_REGION" \
+            --run-id "$run_id" \
+            --work-dir "$RUNNER_TEMP/unrealops-acceptance-$run_id" \
+            --confirm-billable
