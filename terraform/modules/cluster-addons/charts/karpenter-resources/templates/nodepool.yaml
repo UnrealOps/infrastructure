@@ -1,0 +1,52 @@
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: {{ .Values.nodePool.name }}
+  annotations:
+    kubernetes.io/description: "General-purpose Spot and On-Demand workload capacity"
+spec:
+  weight: {{ .Values.nodePool.weight }}
+  limits:
+    cpu: {{ .Values.nodePool.cpuLimit | quote }}
+    memory: {{ .Values.nodePool.memoryLimit | quote }}
+  disruption:
+    consolidationPolicy: {{ .Values.nodePool.consolidationPolicy }}
+    consolidateAfter: {{ .Values.nodePool.consolidateAfter }}
+    budgets:
+      - nodes: {{ .Values.nodePool.disruptionBudgetNodes | quote }}
+  template:
+    metadata:
+      labels:
+        {{- toYaml .Values.nodePool.labels | nindent 8 }}
+    spec:
+      expireAfter: {{ .Values.nodePool.expireAfter }}
+      terminationGracePeriod: {{ .Values.nodePool.terminationGracePeriod }}
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: {{ .Values.nodePool.nodeClassName }}
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values:
+            {{- toYaml .Values.nodePool.architectures | nindent 12 }}
+        - key: kubernetes.io/os
+          operator: In
+          values:
+            - linux
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values:
+            {{- toYaml .Values.nodePool.capacityTypes | nindent 12 }}
+        - key: karpenter.k8s.aws/instance-category
+          operator: In
+          values:
+            {{- toYaml .Values.nodePool.instanceCategories | nindent 12 }}
+        - key: karpenter.k8s.aws/instance-generation
+          operator: Gt
+          values:
+            - {{ .Values.nodePool.minimumInstanceGeneration | quote }}
+        - key: karpenter.k8s.aws/instance-hypervisor
+          operator: In
+          values:
+            - nitro

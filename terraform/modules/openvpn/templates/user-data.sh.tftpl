@@ -1,0 +1,506 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+exec > >(tee -a /var/log/openvpn-bootstrap.log | logger -t openvpn-bootstrap -s 2>/dev/console) 2>&1
+export DEBIAN_FRONTEND=noninteractive
+
+readonly REGION='${region}'
+readonly ASG_NAME='${asg_name}'
+readonly LIFECYCLE_HOOK_NAME='${lifecycle_hook_name}'
+readonly ALLOCATION_ID='${allocation_id}'
+readonly SECRET_ARN='${runtime_secret_arn}'
+readonly OPENVPN_VERSION='${openvpn_package_version}'
+readonly OPENVPN_REPO_PRIMARY_FINGERPRINT='30EBF4E73CCE63EEE124DD278E6DA8B4E158C569'
+readonly AWS_CLI_VERSION='2.35.24'
+readonly AWS_CLI_SHA256='d71b4388a3f9e2c56819de40936b018674b04352766eef615b444c4c38b043d7'
+
+HEARTBEAT_PID=""
+INSTANCE_ID=""
+
+on_error() {
+  local exit_code="$1"
+  local line_number="$2"
+  trap - ERR
+  logger -t openvpn-bootstrap "bootstrap failed at line $line_number with exit code $exit_code"
+
+  if [[ -n "$HEARTBEAT_PID" ]]; then
+    kill "$HEARTBEAT_PID" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$INSTANCE_ID" ]] && command -v aws >/dev/null 2>&1; then
+    aws autoscaling complete-lifecycle-action \
+      --region "$REGION" \
+      --auto-scaling-group-name "$ASG_NAME" \
+      --lifecycle-hook-name "$LIFECYCLE_HOOK_NAME" \
+      --instance-id "$INSTANCE_ID" \
+      --lifecycle-action-result ABANDON >/dev/null 2>&1 || true
+  fi
+  exit "$exit_code"
+}
+trap 'on_error $? $LINENO' ERR
+
+retry() {
+  local attempt=1
+  local maximum_attempts=6
+
+  until "$@"; do
+    if ((attempt >= maximum_attempts)); then
+      return 1
+    fi
+    sleep $((attempt * 5))
+    attempt=$((attempt + 1))
+  done
+}
+
+# Ubuntu cloud images may ship region-specific HTTP mirrors. Upgrade every
+# configured APT source to TLS before the first package index download.
+sed -i 's|http://|https://|g' \
+  /etc/apt/sources.list \
+  /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true
+
+apt-get update
+apt-get install --yes --no-install-recommends \
+  ca-certificates \
+  curl \
+  diffutils \
+  gnupg \
+  iproute2 \
+  jq \
+  nftables \
+  openssl \
+  unzip
+
+curl --fail --silent --show-error --location \
+  "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-$AWS_CLI_VERSION.zip" \
+  --output /tmp/awscliv2.zip
+printf '%s  %s\n' "$AWS_CLI_SHA256" /tmp/awscliv2.zip | sha256sum --check --strict
+unzip -q /tmp/awscliv2.zip -d /tmp/aws-cli-installer
+/tmp/aws-cli-installer/aws/install \
+  --bin-dir /usr/local/bin \
+  --install-dir /usr/local/aws-cli
+aws --version
+
+TOKEN="$(curl --fail --silent --show-error --request PUT \
+  --header 'X-aws-ec2-metadata-token-ttl-seconds: 21600' \
+  http://169.254.169.254/latest/api/token)"
+INSTANCE_ID="$(curl --fail --silent --show-error \
+  --header "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/instance-id)"
+
+heartbeat() {
+  while sleep 60; do
+    aws autoscaling record-lifecycle-action-heartbeat \
+      --region "$REGION" \
+      --auto-scaling-group-name "$ASG_NAME" \
+      --lifecycle-hook-name "$LIFECYCLE_HOOK_NAME" \
+      --instance-id "$INSTANCE_ID" >/dev/null || true
+  done
+}
+heartbeat &
+HEARTBEAT_PID="$!"
+
+retry aws ec2 modify-instance-attribute \
+  --region "$REGION" \
+  --instance-id "$INSTANCE_ID" \
+  --source-dest-check '{"Value":false}'
+
+curl --fail --silent --show-error \
+  https://swupdate.openvpn.net/repos/repo-public.gpg \
+  --output /tmp/openvpn-repository.gpg
+OPENVPN_REPO_METADATA="$(gpg --show-keys --with-colons /tmp/openvpn-repository.gpg)"
+OPENVPN_REPO_PRIMARY_KEY_COUNT="$(
+  awk -F: '$1 == "pub" { count++ } END { print count + 0 }' <<<"$OPENVPN_REPO_METADATA"
+)"
+OPENVPN_REPO_PRIMARY_FINGERPRINTS="$(
+  awk -F: '$1 == "pub" { want_fingerprint = 1; next }
+    want_fingerprint && $1 == "fpr" { print $10; want_fingerprint = 0 }' \
+    <<<"$OPENVPN_REPO_METADATA"
+)"
+[[ "$OPENVPN_REPO_PRIMARY_KEY_COUNT" == "1" ]]
+[[ "$OPENVPN_REPO_PRIMARY_FINGERPRINTS" == "$OPENVPN_REPO_PRIMARY_FINGERPRINT" ]]
+gpg --batch --yes --dearmor \
+  --output /usr/share/keyrings/openvpn-repository.gpg \
+  /tmp/openvpn-repository.gpg
+cat >/etc/apt/sources.list.d/openvpn-packages.list <<'EOF'
+deb [arch=amd64 signed-by=/usr/share/keyrings/openvpn-repository.gpg] https://build.openvpn.net/debian/openvpn/stable noble main
+EOF
+
+apt-get update
+apt-get install --yes --no-install-recommends "openvpn=$OPENVPN_VERSION"
+apt-mark hold openvpn
+
+curl --fail --silent --show-error \
+  "https://amazoncloudwatch-agent-$REGION.s3.$REGION.amazonaws.com/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb" \
+  --output /tmp/amazon-cloudwatch-agent.deb
+dpkg --install /tmp/amazon-cloudwatch-agent.deb || {
+  apt-get install --fix-broken --yes
+  dpkg --install /tmp/amazon-cloudwatch-agent.deb
+}
+
+if systemctl cat amazon-ssm-agent.service >/dev/null 2>&1; then
+  systemctl enable --now amazon-ssm-agent.service
+elif command -v snap >/dev/null 2>&1 && snap list amazon-ssm-agent >/dev/null 2>&1; then
+  snap start amazon-ssm-agent
+else
+  curl --fail --silent --show-error \
+    "https://s3.$REGION.amazonaws.com/amazon-ssm-$REGION/latest/debian_amd64/amazon-ssm-agent.deb" \
+    --output /tmp/amazon-ssm-agent.deb
+  dpkg --install /tmp/amazon-ssm-agent.deb || {
+    apt-get install --fix-broken --yes
+    dpkg --install /tmp/amazon-ssm-agent.deb
+  }
+  systemctl enable --now amazon-ssm-agent.service
+fi
+
+RUNTIME_JSON="$(retry aws secretsmanager get-secret-value \
+  --region "$REGION" \
+  --secret-id "$SECRET_ARN" \
+  --query SecretString \
+  --output text)"
+jq -e '.schema_version == "1"' <<<"$RUNTIME_JSON" >/dev/null
+
+install -d -m 0755 /etc/openvpn/server /var/log/openvpn /var/lib/openvpn
+
+decode_secret() {
+  local field="$1"
+  local destination="$2"
+  jq --exit-status --raw-output --arg field "$field" \
+    '.[$field] | select(type == "string" and length > 0)' <<<"$RUNTIME_JSON" |
+    base64 --decode >"$destination"
+  [[ -s "$destination" ]]
+}
+
+decode_secret ca_crt /etc/openvpn/server/ca.crt
+decode_secret server_crt /etc/openvpn/server/server.crt
+decode_secret server_key /etc/openvpn/server/server.key
+decode_secret crl_pem /etc/openvpn/server/crl.pem
+decode_secret tls_crypt_key /etc/openvpn/server/tls-crypt.key
+unset RUNTIME_JSON
+
+chmod 0644 \
+  /etc/openvpn/server/ca.crt \
+  /etc/openvpn/server/server.crt \
+  /etc/openvpn/server/crl.pem
+chmod 0600 \
+  /etc/openvpn/server/server.key \
+  /etc/openvpn/server/tls-crypt.key
+
+openssl x509 -in /etc/openvpn/server/server.crt -checkend 0 -noout
+openssl crl \
+  -in /etc/openvpn/server/crl.pem \
+  -CAfile /etc/openvpn/server/ca.crt \
+  -verify \
+  -noout
+openssl pkey -in /etc/openvpn/server/server.key -check -noout
+openssl verify -CAfile /etc/openvpn/server/ca.crt /etc/openvpn/server/server.crt
+openssl x509 -in /etc/openvpn/server/server.crt -pubkey -noout |
+  openssl pkey -pubin -outform DER >/tmp/server-certificate-public-key.der
+openssl pkey -in /etc/openvpn/server/server.key -pubout -outform DER \
+  >/tmp/server-private-key-public-key.der
+cmp /tmp/server-certificate-public-key.der /tmp/server-private-key-public-key.der
+rm -f /tmp/server-certificate-public-key.der /tmp/server-private-key-public-key.der
+
+cat >/etc/openvpn/server/server.conf <<'EOF'
+port ${port}
+proto udp4
+dev tun
+topology subnet
+server ${client_network} ${client_netmask}
+ifconfig-pool-persist /var/lib/openvpn/ipp.txt
+
+ca /etc/openvpn/server/ca.crt
+cert /etc/openvpn/server/server.crt
+key /etc/openvpn/server/server.key
+crl-verify /etc/openvpn/server/crl.pem
+tls-crypt /etc/openvpn/server/tls-crypt.key
+dh none
+
+verify-client-cert require
+remote-cert-tls client
+tls-version-min 1.2
+tls-cert-profile preferred
+tls-groups X25519:secp384r1
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+data-ciphers-fallback AES-256-GCM
+auth SHA256
+allow-compression no
+
+push "dhcp-option DNS ${dns_server}"
+push "route ${dns_server} 255.255.255.255"
+${route_pushes}
+
+keepalive 10 120
+explicit-exit-notify 1
+persist-key
+persist-tun
+user nobody
+group nogroup
+status /var/log/openvpn/status.log 30
+status-version 3
+log-append /var/log/openvpn/server.log
+verb 3
+EOF
+
+cat >/etc/sysctl.d/60-openvpn-forwarding.conf <<'EOF'
+net.ipv4.ip_forward = 1
+net.ipv4.conf.all.rp_filter = 0
+net.ipv4.conf.default.rp_filter = 0
+EOF
+sysctl --system
+
+PRIMARY_INTERFACE="$(ip -o -4 route show to default | awk 'NR == 1 {print $5}')"
+CLIENT_CIDR='${client_cidr}'
+DNS_SERVER='${dns_server}'
+[[ -n "$PRIMARY_INTERFACE" ]]
+cat >/etc/nftables.conf <<EOF
+#!/usr/sbin/nft -f
+flush ruleset
+
+table inet openvpn_filter {
+  chain forward {
+    type filter hook forward priority filter; policy drop;
+    ct state invalid drop
+${nft_forward_rules}
+    iifname "tun0" oifname "$PRIMARY_INTERFACE" ip saddr $CLIENT_CIDR ip daddr $DNS_SERVER udp dport 53 ct state { new, established, related } accept
+    iifname "tun0" oifname "$PRIMARY_INTERFACE" ip saddr $CLIENT_CIDR ip daddr $DNS_SERVER tcp dport 53 ct state { new, established, related } accept
+${nft_return_rules}
+    iifname "$PRIMARY_INTERFACE" oifname "tun0" ip saddr $DNS_SERVER ip daddr $CLIENT_CIDR ct state { established, related } accept
+  }
+}
+
+table ip openvpn_nat {
+  chain postrouting {
+    type nat hook postrouting priority srcnat; policy accept;
+${nft_nat_rules}
+    oifname "$PRIMARY_INTERFACE" ip saddr $CLIENT_CIDR ip daddr $DNS_SERVER masquerade
+  }
+}
+EOF
+nft --check --file /etc/nftables.conf
+systemctl enable --now nftables.service
+
+cat >/usr/local/sbin/openvpn-refresh-crl <<'CRL_SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+readonly REGION='${region}'
+readonly SECRET_ARN='${runtime_secret_arn}'
+
+temporary_file="$(mktemp)"
+trap 'rm -f "$temporary_file"' EXIT
+aws secretsmanager get-secret-value \
+  --region "$REGION" \
+  --secret-id "$SECRET_ARN" \
+  --query SecretString \
+  --output text |
+  jq --exit-status --raw-output '.crl_pem | select(type == "string" and length > 0)' |
+  base64 --decode >"$temporary_file"
+openssl crl \
+  -in "$temporary_file" \
+  -CAfile /etc/openvpn/server/ca.crt \
+  -verify \
+  -noout
+
+if ! cmp --silent "$temporary_file" /etc/openvpn/server/crl.pem; then
+  install -o root -g root -m 0644 "$temporary_file" /etc/openvpn/server/crl.pem
+  systemctl kill --signal HUP openvpn-server@server.service
+  logger -t openvpn-refresh-crl 'installed a new certificate revocation list'
+fi
+CRL_SCRIPT
+chmod 0750 /usr/local/sbin/openvpn-refresh-crl
+
+cat >/etc/systemd/system/openvpn-refresh-crl.service <<'EOF'
+[Unit]
+Description=Refresh the OpenVPN certificate revocation list
+After=network-online.target openvpn-server@server.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/openvpn-refresh-crl
+User=root
+Group=root
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/etc/openvpn/server
+EOF
+
+cat >/etc/systemd/system/openvpn-refresh-crl.timer <<'EOF'
+[Unit]
+Description=Refresh the OpenVPN CRL every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+cat >/usr/local/sbin/openvpn-watchdog <<'WATCHDOG_SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly REGION='${region}'
+readonly FAILURE_THRESHOLD='${watchdog_failure_threshold}'
+readonly STATE_FILE=/run/openvpn-watchdog.failures
+
+token="$(curl --fail --silent --show-error --request PUT \
+  --header 'X-aws-ec2-metadata-token-ttl-seconds: 60' \
+  http://169.254.169.254/latest/api/token)"
+instance_id="$(curl --fail --silent --show-error \
+  --header "X-aws-ec2-metadata-token: $token" \
+  http://169.254.169.254/latest/meta-data/instance-id)"
+
+if systemctl is-active --quiet openvpn-server@server.service &&
+  ip link show tun0 >/dev/null 2>&1 &&
+  ss -H -u -l -n "sport = :${port}" | grep --quiet .; then
+  printf '0\n' >"$STATE_FILE"
+  exit 0
+fi
+
+failures=0
+if [[ -r "$STATE_FILE" ]]; then
+  read -r failures <"$STATE_FILE"
+fi
+failures=$((failures + 1))
+printf '%s\n' "$failures" >"$STATE_FILE"
+logger -t openvpn-watchdog "health check failure $failures of $FAILURE_THRESHOLD"
+
+if ((failures >= FAILURE_THRESHOLD)); then
+  aws autoscaling set-instance-health \
+    --region "$REGION" \
+    --instance-id "$instance_id" \
+    --health-status Unhealthy \
+    --no-should-respect-grace-period
+fi
+WATCHDOG_SCRIPT
+chmod 0750 /usr/local/sbin/openvpn-watchdog
+
+cat >/etc/systemd/system/openvpn-watchdog.service <<'EOF'
+[Unit]
+Description=Mark an unhealthy OpenVPN appliance for ASG replacement
+After=openvpn-server@server.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/openvpn-watchdog
+User=root
+Group=root
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/run
+EOF
+
+cat >/etc/systemd/system/openvpn-watchdog.timer <<'EOF'
+[Unit]
+Description=Check OpenVPN health every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
+EOF
+
+cat >/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'EOF'
+{
+  "agent": {
+    "metrics_collection_interval": 60,
+    "run_as_user": "root"
+  },
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/var/log/openvpn/server.log",
+            "log_group_name": "${log_group_name}",
+            "log_stream_name": "{instance_id}/openvpn",
+            "timezone": "UTC"
+          },
+          {
+            "file_path": "/var/log/openvpn-bootstrap.log",
+            "log_group_name": "${log_group_name}",
+            "log_stream_name": "{instance_id}/bootstrap",
+            "timezone": "UTC"
+          }
+        ]
+      }
+    }
+  },
+  "metrics": {
+    "append_dimensions": {
+      "InstanceId": "$${aws:InstanceId}"
+    },
+    "metrics_collected": {
+      "disk": {
+        "measurement": ["used_percent"],
+        "metrics_collection_interval": 60,
+        "resources": ["/"]
+      },
+      "mem": {
+        "measurement": ["mem_used_percent"],
+        "metrics_collection_interval": 60
+      }
+    }
+  }
+}
+EOF
+
+systemctl disable --now ssh.service ssh.socket >/dev/null 2>&1 || true
+systemctl daemon-reload
+systemctl enable --now openvpn-server@server.service
+
+for _ in $(seq 1 30); do
+  if systemctl is-active --quiet openvpn-server@server.service &&
+    ip link show tun0 >/dev/null 2>&1 &&
+    ss -H -u -l -n "sport = :${port}" | grep --quiet .; then
+    break
+  fi
+  sleep 2
+done
+systemctl is-active --quiet openvpn-server@server.service
+ip link show tun0 >/dev/null
+ss -H -u -l -n "sport = :${port}" | grep --quiet .
+
+systemctl enable --now openvpn-refresh-crl.timer openvpn-watchdog.timer
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+  -a fetch-config \
+  -m ec2 \
+  -s \
+  -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+
+retry aws ec2 associate-address \
+  --region "$REGION" \
+  --allocation-id "$ALLOCATION_ID" \
+  --instance-id "$INSTANCE_ID" \
+  --allow-reassociation >/dev/null
+
+for _ in $(seq 1 30); do
+  ASSOCIATED_INSTANCE="$(aws ec2 describe-addresses \
+    --region "$REGION" \
+    --allocation-ids "$ALLOCATION_ID" \
+    --query 'Addresses[0].InstanceId' \
+    --output text)"
+  [[ "$ASSOCIATED_INSTANCE" == "$INSTANCE_ID" ]] && break
+  sleep 2
+done
+[[ "$ASSOCIATED_INSTANCE" == "$INSTANCE_ID" ]]
+
+retry aws autoscaling complete-lifecycle-action \
+  --region "$REGION" \
+  --auto-scaling-group-name "$ASG_NAME" \
+  --lifecycle-hook-name "$LIFECYCLE_HOOK_NAME" \
+  --instance-id "$INSTANCE_ID" \
+  --lifecycle-action-result CONTINUE
+
+trap - ERR
+kill "$HEARTBEAT_PID" >/dev/null 2>&1 || true
+logger -t openvpn-bootstrap "OpenVPN is healthy; associated $ALLOCATION_ID and completed launch lifecycle"

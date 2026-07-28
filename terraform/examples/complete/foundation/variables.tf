@@ -1,0 +1,86 @@
+variable "aws_region" {
+  description = "AWS region in which to deploy the studio foundation."
+  type        = string
+}
+
+variable "name" {
+  description = "Lowercase environment and cluster name used for all resources."
+  type        = string
+  default     = "studio-dev"
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{1,28}[a-z0-9]$", var.name))
+    error_message = "name must be 3-30 lowercase alphanumeric or hyphen characters and start with a letter."
+  }
+}
+
+variable "vpc_cidr" {
+  description = "Canonical /16 VPC CIDR."
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "availability_zones" {
+  description = "Optional three-zone override. The network module chooses the first three available zones when empty."
+  type        = list(string)
+  default     = []
+}
+
+variable "openvpn_runtime_secret_arn" {
+  description = "Secrets Manager ARN created by scripts/openvpn-pki.sh init."
+  type        = string
+}
+
+variable "openvpn_runtime_secret_kms_key_arn" {
+  description = "Optional customer-managed KMS key encrypting the OpenVPN runtime secret."
+  type        = string
+  default     = null
+}
+
+variable "openvpn_ingress_cidrs" {
+  description = "Public CIDRs allowed to initiate OpenVPN UDP connections."
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+}
+
+variable "openvpn_instance_type" {
+  description = "EC2 instance type for the single OpenVPN appliance."
+  type        = string
+  default     = "t3.small"
+}
+
+variable "openvpn_route53_zone_id" {
+  description = "Optional public Route 53 hosted-zone ID for the VPN endpoint."
+  type        = string
+  default     = null
+}
+
+variable "openvpn_route53_record_name" {
+  description = "Optional public DNS name for the VPN endpoint. Set with openvpn_route53_zone_id."
+  type        = string
+  default     = null
+}
+
+variable "admin_principal_arns" {
+  description = "IAM role or user ARNs granted the AmazonEKSClusterAdminPolicy through access entries."
+  type        = set(string)
+  default     = []
+}
+
+variable "enable_cluster_creator_admin_permissions" {
+  description = "Temporarily grant the applying principal cluster-admin. Disable after durable admin_principal_arns are configured."
+  type        = bool
+  default     = true
+}
+
+variable "deletion_protection" {
+  description = "Protect the EKS cluster from accidental deletion."
+  type        = bool
+  default     = false
+}
+
+variable "tags" {
+  description = "Additional tags applied to supported resources."
+  type        = map(string)
+  default     = {}
+}

@@ -1,0 +1,32 @@
+nodeClass:
+  name: default
+  role: KarpenterNodeRole-example
+  discoveryTagValue: example
+  amiAlias: al2023@v20260709
+  rootVolumeSize: 100
+  rootVolumeKmsKey: null
+  tags: {}
+
+nodePool:
+  name: general-purpose
+  nodeClassName: default
+  architectures:
+    - amd64
+  capacityTypes:
+    - spot
+    - on-demand
+  instanceCategories:
+    - c
+    - m
+    - r
+  minimumInstanceGeneration: 5
+  cpuLimit: "1000"
+  memoryLimit: 1000Gi
+  consolidationPolicy: WhenEmptyOrUnderutilized
+  consolidateAfter: 1m
+  disruptionBudgetNodes: 10%
+  expireAfter: 720h
+  terminationGracePeriod: 24h
+  weight: 10
+  labels:
+    unrealops.io/capacity-provider: karpenter

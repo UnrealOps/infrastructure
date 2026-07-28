@@ -1,0 +1,4 @@
+interface:
+  display_name: "Test UnrealOps Infrastructure"
+  short_description: "Run Terratest with verified AWS cleanup"
+  default_prompt: "Use $test-unrealops-infrastructure to run repository checks or scoped AWS acceptance tests with verified cleanup."

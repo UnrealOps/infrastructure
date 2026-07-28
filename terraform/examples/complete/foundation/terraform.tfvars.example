@@ -1,0 +1,16 @@
+aws_region = "us-west-2"
+name       = "studio-dev"
+
+openvpn_runtime_secret_arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:unrealops/studio-dev/openvpn/runtime-example"
+
+admin_principal_arns = [
+  "arn:aws:iam::123456789012:role/StudioInfrastructureAdministrators",
+]
+
+# Restrict this when employees connect from stable public networks.
+openvpn_ingress_cidrs = ["0.0.0.0/0"]
+
+tags = {
+  Owner      = "platform-team"
+  CostCenter = "game-studio"
+}
