@@ -6,7 +6,7 @@ require (
 	github.com/aws/aws-sdk-go v1.55.5
 	github.com/gruntwork-io/terratest v0.47.0
 	github.com/hashicorp/hcl/v2 v2.21.0
-	github.com/stretchr/testify v1.9.0
+	github.com/stretchr/testify v1.11.1
 	github.com/zclconf/go-cty v1.15.0
 )
 
