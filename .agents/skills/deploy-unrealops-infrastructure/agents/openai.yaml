@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deploy UnrealOps Infrastructure"
+  short_description: "Deploy and tear down the UnrealOps AWS stack"
+  default_prompt: "Use $deploy-unrealops-infrastructure to deploy and verify the supported stack with OpenTofu in a user-confirmed AWS account and region."

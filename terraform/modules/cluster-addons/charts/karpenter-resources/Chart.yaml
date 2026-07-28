@@ -1,0 +1,6 @@
+apiVersion: v2
+name: karpenter-resources
+description: Opinionated EC2NodeClass and NodePool resources for UnrealOps clusters
+type: application
+version: 0.1.0
+appVersion: "1.14.0"
