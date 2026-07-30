@@ -1,0 +1,91 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: lore-edge
+  namespace: lore
+  labels:
+    {{- include "lore.labels" . | nindent 4 }}
+    app.kubernetes.io/component: edge
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: external
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internal
+    service.beta.kubernetes.io/aws-load-balancer-name: {{ .Values.nlb.name | quote }}
+    service.beta.kubernetes.io/aws-load-balancer-security-groups: {{ .Values.nlb.securityGroupId | quote }}
+    service.beta.kubernetes.io/aws-load-balancer-manage-backend-security-group-rules: "true"
+    service.beta.kubernetes.io/aws-load-balancer-enable-tcp-udp-listener: "true"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: HTTP
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "41339"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: /health_check
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-interval: "10"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-timeout: "6"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-healthy-threshold: "3"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-unhealthy-threshold: "3"
+    service.beta.kubernetes.io/aws-load-balancer-attributes: load_balancing.cross_zone.enabled=true
+    service.beta.kubernetes.io/aws-load-balancer-target-group-attributes: deregistration_delay.timeout_seconds=30,preserve_client_ip.enabled=true
+    service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: {{ printf "Environment=%s,ManagedBy=Terraform,unrealops.io/lore=%s" .Values.clusterName .Values.clusterName | quote }}
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Cluster
+  selector:
+    app.kubernetes.io/name: lore
+    app.kubernetes.io/component: edge
+  ports:
+    - name: grpc
+      protocol: TCP
+      port: 41337
+      targetPort: grpc
+    - name: quic
+      protocol: UDP
+      port: 41337
+      targetPort: quic
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lore-write
+  namespace: lore
+  labels:
+    {{- include "lore.labels" . | nindent 4 }}
+    app.kubernetes.io/component: write
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: lore
+    app.kubernetes.io/component: write
+  ports:
+    - name: grpc
+      protocol: TCP
+      port: 41337
+      targetPort: grpc
+    - name: replication
+      protocol: UDP
+      port: 41340
+      targetPort: replication
+    - name: health
+      protocol: TCP
+      port: 41339
+      targetPort: health
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lore-otel
+  namespace: lore
+  labels:
+    {{- include "lore.labels" . | nindent 4 }}
+    app.kubernetes.io/component: telemetry
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: lore
+    app.kubernetes.io/component: telemetry
+  ports:
+    - name: otlp-grpc
+      protocol: TCP
+      port: 4317
+      targetPort: otlp-grpc
+    - name: otlp-http
+      protocol: TCP
+      port: 4318
+      targetPort: otlp-http

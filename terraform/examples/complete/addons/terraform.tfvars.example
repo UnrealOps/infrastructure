@@ -1,6 +1,10 @@
 aws_region   = "us-west-2"
 cluster_name = "studio-dev" # must match foundation name
 
+# Enable only after the Lore foundation and image publication workflow finish.
+enable_lore = false
+# lore_image = "123456789012.dkr.ecr.us-west-2.amazonaws.com/studio-dev/lore-server@sha256:<64-lowercase-hex-characters>"
+
 tags = {
   Owner      = "platform-team"
   CostCenter = "game-studio"

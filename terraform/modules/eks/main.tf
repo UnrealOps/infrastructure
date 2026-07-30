@@ -12,6 +12,18 @@ data "aws_iam_policy_document" "ebs_csi_assume_role" {
   }
 }
 
+data "aws_iam_policy_document" "cloudwatch_observability_assume_role" {
+  statement {
+    sid     = "EKSPodIdentity"
+    actions = ["sts:AssumeRole", "sts:TagSession"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["pods.eks.amazonaws.com"]
+    }
+  }
+}
+
 resource "aws_iam_role" "ebs_csi" {
   name               = "${var.cluster_name}-ebs-csi"
   description        = "EKS Pod Identity role for the Amazon EBS CSI driver"
@@ -25,13 +37,44 @@ resource "aws_iam_role_policy_attachment" "ebs_csi" {
   policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
 }
 
+resource "aws_iam_role" "cloudwatch_observability" {
+  count = var.enable_lore_observability ? 1 : 0
+
+  name               = "${var.cluster_name}-cloudwatch-observability"
+  description        = "EKS Pod Identity role for the CloudWatch Observability add-on"
+  assume_role_policy = data.aws_iam_policy_document.cloudwatch_observability_assume_role.json
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "cloudwatch_agent" {
+  count = var.enable_lore_observability ? 1 : 0
+
+  role       = aws_iam_role.cloudwatch_observability[0].name
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/CloudWatchAgentServerPolicy"
+}
+
+resource "aws_iam_role_policy_attachment" "cloudwatch_xray" {
+  count = var.enable_lore_observability ? 1 : 0
+
+  role       = aws_iam_role.cloudwatch_observability[0].name
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AWSXrayWriteOnlyAccess"
+}
+
 locals {
   control_plane_subnet_ids = length(var.control_plane_subnet_ids) > 0 ? var.control_plane_subnet_ids : var.private_subnet_ids
+  container_insights_log_group_suffixes = toset([
+    "application",
+    "dataplane",
+    "host",
+    "performance",
+  ])
 
   cluster_addons = {
     vpc-cni = {
       addon_version               = local.cluster_addon_versions.vpc_cni
       before_compute              = true
+      configuration_values        = jsonencode({ enableNetworkPolicy = "true" })
       most_recent                 = false
       resolve_conflicts_on_create = "OVERWRITE"
       resolve_conflicts_on_update = "OVERWRITE"
@@ -66,6 +109,43 @@ locals {
       }]
     }
   }
+
+  lore_observability_addon = var.enable_lore_observability ? {
+    amazon-cloudwatch-observability = {
+      addon_version = local.cluster_addon_versions.cloudwatch_observability
+      configuration_values = jsonencode({
+        containerInsights = {
+          enabled = false
+        }
+        otelContainerInsights = {
+          enabled = true
+        }
+        manager = {
+          applicationSignals = {
+            autoMonitor = {
+              monitorAllServices = false
+            }
+          }
+        }
+      })
+      most_recent                 = false
+      resolve_conflicts_on_create = "OVERWRITE"
+      resolve_conflicts_on_update = "OVERWRITE"
+      pod_identity_association = [{
+        role_arn        = aws_iam_role.cloudwatch_observability[0].arn
+        service_account = "cloudwatch-agent"
+      }]
+    }
+  } : {}
+}
+
+resource "aws_cloudwatch_log_group" "container_insights" {
+  for_each = var.enable_lore_observability ? local.container_insights_log_group_suffixes : toset([])
+
+  name              = "/aws/containerinsights/${var.cluster_name}/${each.value}"
+  retention_in_days = var.cloudwatch_log_retention_days
+
+  tags = var.tags
 }
 
 module "eks" {
@@ -117,7 +197,7 @@ module "eks" {
     }
   }
 
-  addons = local.cluster_addons
+  addons = merge(local.cluster_addons, local.lore_observability_addon)
 
   eks_managed_node_groups = {
     system = {
@@ -180,4 +260,6 @@ module "eks" {
   })
 
   tags = var.tags
+
+  depends_on = [aws_cloudwatch_log_group.container_insights]
 }

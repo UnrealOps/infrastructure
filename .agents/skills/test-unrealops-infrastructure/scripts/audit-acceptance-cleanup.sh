@@ -30,6 +30,9 @@ manifest_path=""
 kms_key_id=""
 kms_evidence_mode=""
 expected_kms_arn=""
+lore_kms_key_id=""
+expected_lore_kms_arn=""
+lore_kms_evidence_required="false"
 wait_seconds=0
 secret_ids=()
 
@@ -92,6 +95,27 @@ if [[ -n "$manifest_path" ]]; then
 	[[ "$manifest_region" == "$region" ]] || die "manifest region does not match --region"
 	[[ "$manifest_run_id" == "$run_id" ]] || die "manifest run_id does not match --run-id"
 	[[ "$manifest_e2e" == "$e2e" ]] || die "manifest EKS owner does not match this run"
+	manifest_lore_image="$(jq -r '.lore_image // empty' "$manifest_path")" ||
+		die "could not parse Lore acceptance marker"
+	if [[ -n "$manifest_lore_image" ]]; then
+		lore_kms_evidence_required="true"
+		lore_kms_key_id="$(jq -r --arg owner "$e2e" '
+      .cleanup_evidence.lore_kms_key
+      | select(.owner_type == "lore-cluster")
+      | select(.owner_name == $owner)
+      | select(.captured_from == "terraform-output:lore_kms_key_arn")
+      | .arn
+      | select(type == "string" and length > 0)
+    ' "$manifest_path")" || die "could not parse run-linked Lore KMS cleanup evidence"
+		if [[ -n "$lore_kms_key_id" ]]; then
+			IFS=: read -r lore_marker_arn lore_marker_partition lore_marker_service lore_marker_region \
+				lore_marker_account lore_marker_resource <<<"$lore_kms_key_id"
+			[[ "$lore_marker_arn" == "arn" && -n "$lore_marker_partition" &&
+				"$lore_marker_service" == "kms" && "$lore_marker_region" == "$region" &&
+				"$lore_marker_account" == "$account_id" && "$lore_marker_resource" == key/?* ]] ||
+				die "manifest Lore KMS evidence points outside the authorized account/region"
+		fi
+	fi
 
 	manifest_kms_key_id="$(jq -r --arg owner "$e2e" '
     .cleanup_evidence.eks_kms_key
@@ -133,6 +157,15 @@ actual_account="$(aws sts get-caller-identity --region "$region" --query Account
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../../.." && pwd)"
+if [[ ${#secret_ids[@]} -eq 0 && -n "$manifest_path" ]]; then
+	while IFS= read -r manifest_secret_id; do
+		[[ -n "$manifest_secret_id" ]] && secret_ids+=("$manifest_secret_id")
+	done < <(jq -r '
+    [.secret_arn, .complete_secret_arn, .lore_secret_arn]
+    | .[]
+    | select(type == "string" and length > 0)
+  ' "$manifest_path")
+fi
 [[ ${#secret_ids[@]} -gt 0 ]] || secret_ids=(
 	"unrealops/acceptance/acc-$run_id/openvpn"
 	"unrealops/acceptance/acc-$run_id-complete/openvpn"
@@ -260,6 +293,57 @@ audit_expected_kms_key() {
 	fi
 }
 
+audit_expected_lore_kms_key() {
+	local output state enabled deletion_date key_arn aliases_output aliases
+	local arn_prefix partition service key_region key_account key_resource
+
+	[[ "$lore_kms_evidence_required" == "true" ]] || return
+	if [[ -z "$lore_kms_key_id" ]]; then
+		record "manifest lacks run-linked Lore KMS cleanup evidence"
+		return
+	fi
+
+	if output="$(aws kms describe-key --region "$region" --key-id "$lore_kms_key_id" 2>"$error_file")"; then
+		key_arn="$(jq -er '.KeyMetadata.Arn' <<<"$output")" ||
+			die "Lore KMS response is missing KeyMetadata.Arn"
+		state="$(jq -er '.KeyMetadata.KeyState' <<<"$output")" ||
+			die "Lore KMS response is missing KeyMetadata.KeyState"
+		enabled="$(jq -er '.KeyMetadata.Enabled | if type == "boolean" then tostring else error("missing boolean") end' <<<"$output")" ||
+			die "Lore KMS response is missing KeyMetadata.Enabled"
+		deletion_date="$(jq -r '.KeyMetadata.DeletionDate // empty' <<<"$output")" ||
+			die "could not parse Lore KMS deletion date"
+		expected_lore_kms_arn="$key_arn"
+
+		IFS=: read -r arn_prefix partition service key_region key_account key_resource <<<"$key_arn"
+		if [[ "$arn_prefix" != "arn" || -z "$partition" || "$service" != "kms" ||
+			"$key_region" != "$region" || "$key_account" != "$account_id" || "$key_resource" != key/* ]]; then
+			record "Lore KMS cleanup evidence points outside the authorized account/region: $key_arn"
+		elif [[ "$key_arn" != "$lore_kms_key_id" ]]; then
+			record "manifest Lore KMS ARN resolved to a different key: expected=$lore_kms_key_id actual=$key_arn"
+		elif [[ "$state" == "PendingDeletion" && "$enabled" == "false" && -n "$deletion_date" ]]; then
+			printf 'Expected scheduled Lore KMS remnant: %s deletion=%s\n' "$key_arn" "$deletion_date"
+		else
+			record "Lore KMS key is not safely pending deletion: $key_arn state=$state enabled=$enabled"
+		fi
+
+		if aliases_output="$(aws kms list-aliases --region "$region" --key-id "$key_arn" \
+			--output json 2>"$error_file")"; then
+			aliases="$(jq -r '.Aliases[]?.AliasName' <<<"$aliases_output")" ||
+				die "could not parse aliases targeting the run-linked Lore KMS key"
+			record_output "KMS aliases targeting run-linked Lore key" "$aliases"
+		elif ! grep -q 'NotFoundException' "$error_file"; then
+			cat "$error_file" >&2
+			die "could not audit aliases targeting Lore KMS key $key_arn"
+		fi
+	elif grep -q 'NotFoundException' "$error_file"; then
+		expected_lore_kms_arn="$lore_kms_key_id"
+		printf 'Run-linked Lore KMS key is fully deleted: %s\n' "$lore_kms_key_id"
+	else
+		cat "$error_file" >&2
+		die "could not audit Lore KMS key: $lore_kms_key_id"
+	fi
+}
+
 check_tagged_resources() {
 	local selector="$1"
 	local key="${selector%%=*}" value="${selector#*=}" arns arn secret_id secret_resource expected_secret
@@ -267,7 +351,8 @@ check_tagged_resources() {
 		--tag-filters "Key=$key,Values=$value" --query 'ResourceTagMappingList[].ResourceARN' --output text)" ||
 		die "could not enumerate resources tagged $selector"
 	for arn in $arns; do
-		if [[ -n "$expected_kms_arn" && "$arn" == "$expected_kms_arn" ]]; then
+		if [[ (-n "$expected_kms_arn" && "$arn" == "$expected_kms_arn") ||
+			(-n "$expected_lore_kms_arn" && "$arn" == "$expected_lore_kms_arn") ]]; then
 			continue
 		fi
 		expected_secret=false
@@ -548,6 +633,7 @@ audit_once() {
 	done
 
 	audit_expected_kms_key
+	audit_expected_lore_kms_key
 	for selector in "${selectors[@]}"; do
 		check_tagged_resources "$selector"
 	done
@@ -569,6 +655,13 @@ audit_once() {
 		cat "$error_file" >&2
 		die "could not audit EKS cluster"
 	fi
+	if aws dynamodb describe-table --region "$region" \
+		--table-name "$e2e-lore-pitr-restore" >/dev/null 2>"$error_file"; then
+		record "Lore PITR restore table remains: $e2e-lore-pitr-restore"
+	elif ! grep -q 'ResourceNotFoundException' "$error_file"; then
+		cat "$error_file" >&2
+		die "could not audit Lore PITR restore table"
+	fi
 
 	check_autoscaling_groups
 
@@ -583,6 +676,13 @@ audit_once() {
 		output="$(aws logs describe-log-groups --region "$region" --log-group-name-prefix "$log_group" \
 			--query "logGroups[?logGroupName==\`$log_group\`].logGroupName" --output text)" ||
 			die "could not audit CloudWatch log group $log_group"
+		record_output "CloudWatch log groups" "$output"
+	done
+	for log_group_prefix in "/aws/containerinsights/$e2e/" "/aws/lore/$e2e/"; do
+		output="$(aws logs describe-log-groups --region "$region" \
+			--log-group-name-prefix "$log_group_prefix" \
+			--query 'logGroups[].logGroupName' --output text)" ||
+			die "could not audit CloudWatch log group prefix $log_group_prefix"
 		record_output "CloudWatch log groups" "$output"
 	done
 	check_tagged_log_groups

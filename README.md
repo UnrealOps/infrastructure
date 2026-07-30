@@ -9,7 +9,8 @@ your team.
 
 Deploy an isolated AWS foundation for Unreal Engine game development with
 reusable Terraform and OpenTofu modules: a private Amazon EKS cluster, efficient
-Karpenter capacity, and a self-hosted OpenVPN Community gateway.
+Karpenter capacity, a self-hosted OpenVPN Community gateway, and an opt-in
+two-tier Lore binary-asset service.
 
 📚 Find UnrealOps tutorials on
 [Substack](https://substack.com/@unrealops) and the
@@ -57,10 +58,13 @@ flowchart LR
     Foundation --> VPN["OpenVPN"]
     Foundation --> EKS["Private EKS"]
     Foundation --> KarpenterAWS["Karpenter AWS prerequisites"]
+    Foundation --> LoreAWS["Optional Lore ECR, S3, DynamoDB, IAM, private DNS"]
     Operator -->|Connect| VPN
     VPN -->|Private API access| EKS
     Operator --> Addons["Add-ons root"]
     Addons -->|Karpenter controller, EC2NodeClass, NodePool| EKS
+    Addons -->|Optional Lore edge, write, and ADOT tiers| EKS
+    LoreAWS --> EKS
 ```
 
 Apply `terraform/examples/complete/foundation` first. After connecting through
@@ -141,16 +145,33 @@ these Terraform roots. Retire them separately according to studio policy.
 
 | Module | Purpose |
 | --- | --- |
-| [`network`](terraform/modules/network) | Three-AZ VPC, private EKS subnets, per-AZ NAT, VPN subnets, flow logs, and S3 endpoint |
+| [`network`](terraform/modules/network) | Three-AZ VPC, private EKS subnets, per-AZ NAT, VPN subnets, flow logs, and S3/DynamoDB gateway endpoints |
 | [`openvpn`](terraform/modules/openvpn) | Self-healing OpenVPN Community instance with a stable Elastic IP and offline CA workflow |
 | [`eks`](terraform/modules/eks) | Private EKS control plane, managed add-ons, encryption, access entries, and AL2023 system nodes |
 | [`karpenter-infra`](terraform/modules/karpenter-infra) | Karpenter IAM, Pod Identity, interruption queue, and EKS access entry |
+| [`cluster-addons-infra`](terraform/modules/cluster-addons-infra) | AWS Load Balancer Controller IAM and Pod Identity |
 | [`cluster-addons`](terraform/modules/cluster-addons) | Karpenter controller, CRDs, EC2NodeClass, and general-purpose NodePool |
+| [`lore-infra`](terraform/modules/lore-infra) | Lore ECR, S3/KMS, exact DynamoDB schemas, IAM, private DNS, NLB security group, and alarms |
+| [`lore-workload`](terraform/modules/lore-workload) | Private two-tier Lore Helm workload, dedicated NVMe pool, ADOT, NLB alias, dashboard, and alarms |
+
+## Lore deployment order
+
+Lore remains disabled unless both roots set `enable_lore = true`.
+
+1. Run `make lore-pki-init CLUSTER_NAME=studio-dev AWS_REGION=us-west-2`.
+2. Apply the foundation with Lore enabled.
+3. Run the protected `Lore image` workflow and copy its immutable digest URI.
+4. Connect through OpenVPN.
+5. Apply add-ons with Lore enabled and the digest URI in `lore_image`.
+6. Run `make lore-ca` and install the CA on authorized clients.
+7. Destroy add-ons before foundation. Force deletion is only for isolated,
+   ephemeral acceptance runs.
 
 ## 📚 Documentation and Tutorials
 
 - [Complete foundation example](terraform/examples/complete/foundation)
 - [Complete add-ons example](terraform/examples/complete/addons)
+- [Lore private EKS deployment](docs/lore-deployment.md)
 - [Deployment skill and runbook](.agents/skills/deploy-unrealops-infrastructure/SKILL.md)
 - [Testing and cleanup skill](.agents/skills/test-unrealops-infrastructure/SKILL.md)
 - [UnrealOps on Substack](https://substack.com/@unrealops)

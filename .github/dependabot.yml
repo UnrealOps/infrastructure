@@ -22,3 +22,8 @@ updates:
     directory: /terraform/examples/complete/addons
     schedule:
       interval: weekly
+
+  - package-ecosystem: docker
+    directory: /docker/lore
+    schedule:
+      interval: weekly

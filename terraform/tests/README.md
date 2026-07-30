@@ -11,9 +11,22 @@ With `TF_ACC` unset, `go test ./...` runs contract tests and skips live tests. P
   --confirm-billable
 ```
 
+Add `--lore-image <private-ecr-uri>@sha256:<digest>` and
+`--lore-client /absolute/path/to/lore` together to enable the Lore live path.
+The immutable source image must be in a stable repository in the same private
+ECR registry, and `crane` must be installed. The test mirrors the full
+multi-architecture manifest into the run-specific repository created by
+foundation, then provisions a separate encrypted Lore CA and runtime secret,
+enables the complete two-tier stack, validates the AWS controls and private
+endpoint, pushes and clones binary content, checks deduplication and locks,
+disrupts both tiers, exercises S3 version recovery and DynamoDB PITR, and
+checks the default service-account credential boundary. Omitting both flags preserves the existing non-Lore
+acceptance run. The client must be v0.8.5 built from the source revision pinned
+in `docker/lore/source.env`.
+
 On macOS, pass `--openvpn-connect-cli "/Applications/OpenVPN Connect/OpenVPN Connect.app/Contents/MacOS/OpenVPN Connect"` when an unprivileged `openvpn` process cannot create a `utun` interface. The fallback was validated with OpenVPN Connect 3.6.0 and accepts version 3.6 or newer in the 3.x line; use a current 3.x release. Close OpenVPN Connect before starting and do not interact with it during the run. The test imports one uniquely named temporary profile, starts the app minimized, waits for the warm IPC host, and sends `--connect-shortcut=<id>` for that exact profile. It does not mutate `launch-options` or another global setting. Cleanup disconnects the shortcut, quits and waits for the app, then removes only the imported profile ID.
 
-For advanced/manual invocation, the suite requires `TF_ACC=1`, `AWS_REGION`, `AWS_DEFAULT_REGION`, `TEST_AWS_ACCOUNT_ID`, and a unique `TEST_RUN_ID` of at most 16 lowercase alphanumeric/hyphen characters. It also requires separate revocation and complete-stack runtime secret/profile variables documented in `.agents/skills/test-unrealops-infrastructure/references/acceptance-runbook.md`. Use distinct `EASYRSA_PASSIN` and `EASYRSA_PASSOUT` files even when they contain the same passphrase.
+For advanced/manual invocation, the suite requires `TF_ACC=1`, `AWS_REGION`, `AWS_DEFAULT_REGION`, `TEST_AWS_ACCOUNT_ID`, and a unique `TEST_RUN_ID` of at most 16 lowercase alphanumeric/hyphen characters. It also requires separate revocation and complete-stack runtime secret/profile variables documented in `.agents/skills/test-unrealops-infrastructure/references/acceptance-runbook.md`. Use distinct `EASYRSA_PASSIN` and `EASYRSA_PASSOUT` files even when they contain the same passphrase. The Lore path additionally requires `TEST_LORE_IMAGE`, `TEST_LORE_RUNTIME_SECRET_NAME`, `TEST_LORE_CA_FILE`, and `TEST_LORE_CLIENT`.
 
 Use a dedicated account with quotas for three NAT gateways, EKS, EC2, IAM, KMS, and EIPs. A full run is intentionally scheduled or manual because it is billable and can take more than an hour. Tests register destroy cleanup before apply, but deferred destroys are not proof of cleanup.
 

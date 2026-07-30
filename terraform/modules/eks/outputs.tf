@@ -77,3 +77,13 @@ output "ebs_csi_pod_identity_role_arn" {
   description = "Pod Identity IAM role used by the EBS CSI controller."
   value       = aws_iam_role.ebs_csi.arn
 }
+
+output "cloudwatch_observability_pod_identity_role_arn" {
+  description = "Pod Identity IAM role used by the optional CloudWatch Observability add-on."
+  value       = try(aws_iam_role.cloudwatch_observability[0].arn, null)
+}
+
+output "container_insights_log_group_names" {
+  description = "Terraform-managed Container Insights log groups, empty when Lore observability is disabled."
+  value       = { for suffix, log_group in aws_cloudwatch_log_group.container_insights : suffix => log_group.name }
+}

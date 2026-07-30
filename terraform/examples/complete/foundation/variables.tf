@@ -79,6 +79,36 @@ variable "deletion_protection" {
   default     = false
 }
 
+variable "enable_lore" {
+  description = "Create the opt-in Lore foundation, controller IAM, and CloudWatch observability resources."
+  type        = bool
+  default     = false
+}
+
+variable "lore_runtime_secret_name" {
+  description = "Lore runtime certificate secret name created by scripts/lore-pki.sh. Defaults to unrealops/<name>/lore/runtime."
+  type        = string
+  default     = null
+}
+
+variable "lore_deletion_protection" {
+  description = "Protect Lore DynamoDB tables from accidental deletion."
+  type        = bool
+  default     = true
+}
+
+variable "lore_force_destroy" {
+  description = "Allow deletion of non-empty Lore S3 and ECR resources. Enable only for ephemeral acceptance environments."
+  type        = bool
+  default     = false
+}
+
+variable "lore_alarm_topic_arn" {
+  description = "Optional SNS topic ARN receiving Lore foundation alarms."
+  type        = string
+  default     = null
+}
+
 variable "tags" {
   description = "Additional tags applied to supported resources."
   type        = map(string)
