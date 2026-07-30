@@ -1,0 +1,210 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: lore
+  labels:
+    {{- include "lore.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: lore
+  labels:
+    {{- include "lore.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: lore-edge
+  namespace: lore
+  labels:
+    {{- include "lore.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: lore
+      app.kubernetes.io/component: edge
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        {{- range .Values.aws.vpnCidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 41337
+        - protocol: UDP
+          port: 41337
+    - from:
+        - ipBlock:
+            cidr: {{ .Values.aws.vpcCidr | quote }}
+      ports:
+        - protocol: TCP
+          port: 41339
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: lore
+              app.kubernetes.io/component: write
+      ports:
+        - protocol: TCP
+          port: 41337
+        - protocol: UDP
+          port: 41340
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: lore
+              app.kubernetes.io/component: telemetry
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - {{ .Values.aws.vpcCidr | quote }}
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - ipBlock:
+            cidr: 169.254.170.23/32
+      ports:
+        - protocol: TCP
+          port: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: lore-write
+  namespace: lore
+  labels:
+    {{- include "lore.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: lore
+      app.kubernetes.io/component: write
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: lore
+              app.kubernetes.io/component: edge
+      ports:
+        - protocol: TCP
+          port: 41337
+        - protocol: UDP
+          port: 41340
+    - from:
+        - ipBlock:
+            cidr: {{ .Values.aws.vpcCidr | quote }}
+      ports:
+        - protocol: TCP
+          port: 41339
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: lore
+              app.kubernetes.io/component: telemetry
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - {{ .Values.aws.vpcCidr | quote }}
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - ipBlock:
+            cidr: 169.254.170.23/32
+      ports:
+        - protocol: TCP
+          port: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: lore-otel
+  namespace: lore
+  labels:
+    {{- include "lore.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: lore
+      app.kubernetes.io/component: telemetry
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: lore
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+    - from:
+        - ipBlock:
+            cidr: {{ .Values.aws.vpcCidr | quote }}
+      ports:
+        - protocol: TCP
+          port: 13133
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - {{ .Values.aws.vpcCidr | quote }}
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - ipBlock:
+            cidr: 169.254.170.23/32
+      ports:
+        - protocol: TCP
+          port: 80

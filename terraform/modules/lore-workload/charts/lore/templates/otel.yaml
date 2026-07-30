@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lore-otel
+  namespace: lore
+  labels:
+    {{- include "lore.labels" . | nindent 4 }}
+    app.kubernetes.io/component: telemetry
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lore
+      app.kubernetes.io/component: telemetry
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lore
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: telemetry
+    spec:
+      serviceAccountName: lore-otel
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        {{- include "lore.podSecurityContext" . | nindent 8 }}
+      nodeSelector:
+        unrealops.io/node-role: system
+        kubernetes.io/arch: amd64
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: lore
+                    app.kubernetes.io/component: telemetry
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: collector
+          image: {{ .Values.telemetry.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config=/etc/otel/config.yaml
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+              protocol: TCP
+            - name: otlp-http
+              containerPort: 4318
+              protocol: TCP
+            - name: health
+              containerPort: 13133
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            {{- include "lore.containerSecurityContext" . | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: health
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: health
+            periodSeconds: 20
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: lore-otel-config
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: lore-otel
+  namespace: lore
+  labels:
+    {{- include "lore.labels" . | nindent 4 }}
+    app.kubernetes.io/component: telemetry
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lore
+      app.kubernetes.io/component: telemetry

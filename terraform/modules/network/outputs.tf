@@ -80,7 +80,12 @@ output "nat_gateway_public_ips" {
 
 output "s3_gateway_endpoint_id" {
   description = "ID of the S3 gateway VPC endpoint associated with private route tables."
-  value       = module.s3_endpoint.endpoints["s3"].id
+  value       = module.gateway_endpoints.endpoints["s3"].id
+}
+
+output "dynamodb_gateway_endpoint_id" {
+  description = "ID of the DynamoDB gateway VPC endpoint associated with private route tables."
+  value       = module.gateway_endpoints.endpoints["dynamodb"].id
 }
 
 output "vpn_source_prefix_list_id" {

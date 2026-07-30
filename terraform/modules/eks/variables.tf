@@ -138,6 +138,12 @@ variable "cloudwatch_log_retention_days" {
   }
 }
 
+variable "enable_lore_observability" {
+  description = "Install the pinned CloudWatch Observability add-on for Lore with OTel Container Insights and Pod Identity."
+  type        = bool
+  default     = false
+}
+
 variable "kms_key_administrators" {
   description = "IAM principal ARNs allowed to administer the EKS secrets-encryption KMS key. The Terraform caller is used when empty."
   type        = list(string)

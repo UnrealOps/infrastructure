@@ -1,6 +1,12 @@
 # Cluster Add-ons Module
 
-Installs Karpenter `1.14.0` into an existing private EKS `1.36` cluster. CRDs are managed as a dedicated Helm release, followed by the controller and a local manifest chart containing an AL2023 `EC2NodeClass` and general-purpose `NodePool`. This ordering lets a single apply install or upgrade CRDs before custom resources are evaluated.
+Installs Karpenter `1.14.0` into an existing private EKS `1.36` cluster. CRDs
+are managed as a dedicated Helm release, followed by the controller and a local
+manifest chart containing an AL2023 `EC2NodeClass` and general-purpose
+`NodePool`. When `enable_lore_dependencies` is true, it also installs AWS Load
+Balancer Controller `3.4.3`, Secrets Store CSI Driver `1.6.0`, and AWS provider
+`3.1.2`. This ordering lets a single apply install controllers and CRDs before
+Lore custom resources are evaluated.
 
 ## Provider and Usage
 

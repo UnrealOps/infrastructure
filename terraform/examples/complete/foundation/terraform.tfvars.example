@@ -10,6 +10,15 @@ admin_principal_arns = [
 # Restrict this when employees connect from stable public networks.
 openvpn_ingress_cidrs = ["0.0.0.0/0"]
 
+# Lore is opt-in. Run `make lore-pki-init CLUSTER_NAME=studio-dev
+# AWS_REGION=us-west-2` before setting this to true.
+enable_lore = false
+
+# Keep protection enabled for durable environments. Only ephemeral acceptance
+# environments should set force destroy.
+lore_deletion_protection = true
+lore_force_destroy       = false
+
 tags = {
   Owner      = "platform-team"
   CostCenter = "game-studio"

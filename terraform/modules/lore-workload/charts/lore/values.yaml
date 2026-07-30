@@ -1,0 +1,34 @@
+clusterName: ""
+image: ""
+runtimeSecretName: ""
+
+aws:
+  region: ""
+  vpcCidr: ""
+  vpnCidrs: []
+
+nlb:
+  name: ""
+  securityGroupId: ""
+
+storage:
+  bucketName: ""
+  fragmentsTable: ""
+  fragmentMetadataTable: ""
+  mutableStoreTable: ""
+  locksTable: ""
+  edgeCacheMaxSizeBytes: 700000000000
+  writeCacheMaxSizeBytes: 20000000000
+
+edge:
+  replicas: 3
+  instanceTypes:
+    - c8gd.4xlarge
+  nodeRole: ""
+  amiAlias: al2023@v20260709
+
+write:
+  replicas: 2
+
+telemetry:
+  image: public.ecr.aws/aws-observability/aws-otel-collector:v0.48.0

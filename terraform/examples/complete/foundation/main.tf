@@ -1,4 +1,6 @@
 locals {
+  lore_runtime_secret_name = coalesce(var.lore_runtime_secret_name, "unrealops/${var.name}/lore/runtime")
+
   admin_access_entries = {
     for principal_arn in var.admin_principal_arns : "admin-${substr(sha1(principal_arn), 0, 12)}" => {
       principal_arn = principal_arn
@@ -51,6 +53,7 @@ module "eks" {
   access_entries                           = local.admin_access_entries
   enable_cluster_creator_admin_permissions = var.enable_cluster_creator_admin_permissions
   deletion_protection                      = var.deletion_protection
+  enable_lore_observability                = var.enable_lore
   tags                                     = var.tags
 }
 
@@ -60,4 +63,27 @@ module "karpenter_infra" {
   cluster_name = module.eks.cluster_name
   region       = var.aws_region
   tags         = var.tags
+}
+
+module "cluster_addons_infra" {
+  count  = var.enable_lore ? 1 : 0
+  source = "../../../modules/cluster-addons-infra"
+
+  cluster_name = module.eks.cluster_name
+  tags         = var.tags
+}
+
+module "lore_infra" {
+  count  = var.enable_lore ? 1 : 0
+  source = "../../../modules/lore-infra"
+
+  cluster_name              = module.eks.cluster_name
+  vpc_id                    = module.network.vpc_id
+  vpc_cidr                  = module.network.vpc_cidr
+  vpn_source_prefix_list_id = module.network.vpn_source_prefix_list_id
+  runtime_secret_name       = local.lore_runtime_secret_name
+  deletion_protection       = var.lore_deletion_protection
+  force_destroy             = var.lore_force_destroy
+  alarm_topic_arn           = var.lore_alarm_topic_arn
+  tags                      = var.tags
 }

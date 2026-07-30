@@ -3,6 +3,7 @@
 ## What the suite proves
 
 - `TestCompleteStack` deploys the full foundation, checks the pinned EKS/AMI/add-on set and private-only API, enters through a real OpenVPN tunnel, installs Karpenter, provisions a workload node, and waits for consolidation.
+- With `--lore-image` and `--lore-client`, `TestCompleteStack` also enables the Lore foundation and add-ons, verifies ECR/S3/DynamoDB/Route 53 controls, validates private DNS and trusted TLS, exercises QUIC through the pinned Lore client, pushes and clones a binary tree, checks deduplicated S3 growth and shared locks, disrupts both workload tiers, verifies durable cache reconstruction, exercises S3 version recovery and DynamoDB PITR, and proves the default service account has no usable AWS workload credentials.
 - `TestNetwork` checks the three-AZ subnet layout, three NAT gateways, routing, and VPN prefix list.
 - `TestOpenVPNFailoverAndRevocation` checks TLS, IMDSv2, encrypted disk, no SSH ingress, SSM health, instance replacement, stable EIP recovery, CRL rejection, and a healthy control client.
 - Contract tests check the supported layout, local EKS wrapper wiring, add-ons discovery, and Karpenter tags.
@@ -12,6 +13,16 @@ The complete run is serialized and can take more than an hour. It creates billab
 ## Preconditions
 
 The wrapper requires `aws`, OpenTofu or Terraform, Go, kubectl, OpenVPN, `curl`, `jq`, OpenSSL, `tar`, and a SHA-256 utility. The run ID must be at most 16 characters, lowercase alphanumeric/hyphen, and cannot start or end with a hyphen.
+
+Lore acceptance is explicitly opt-in and additionally requires `crane`, an
+executable Lore v0.8.5 client built from commit
+`2d86d1dda98bfc1575ac7a20a6ff8c7fbc760383`, and a prepublished immutable image
+in a stable repository within the authorized account and region's private ECR
+registry. Pass the client and source image with `--lore-client` and
+`--lore-image`. After foundation creates the run-specific ECR repository, the
+test mirrors and verifies both image platforms before applying add-ons. The
+wrapper creates the separate Lore CA and runtime secret only when both
+arguments are supplied.
 
 The wrapper refuses a pre-existing Terraform state in:
 
@@ -58,6 +69,10 @@ TEST_OPENVPN_CONTROL_PROFILE
 TEST_COMPLETE_OPENVPN_RUNTIME_SECRET_ARN
 TEST_COMPLETE_OPENVPN_PROFILE
 TEST_OPENVPN_CONNECT_CLI (optional macOS path)
+TEST_LORE_IMAGE (set by the wrapper when Lore acceptance is enabled)
+TEST_LORE_RUNTIME_SECRET_NAME (set by the wrapper)
+TEST_LORE_CA_FILE (set by the wrapper)
+TEST_LORE_CLIENT (set by the wrapper)
 ```
 
 `make test-live ENGINE=<engine>` runs `go test ./terraform/tests -count=1 -p 1 -parallel 1 -v -timeout 0`.

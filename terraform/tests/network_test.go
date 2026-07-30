@@ -30,4 +30,6 @@ func TestNetwork(t *testing.T) {
 	require.Len(t, terraform.OutputList(t, opts, "vpn_subnet_ids"), 3)
 	require.Len(t, terraform.OutputList(t, opts, "nat_gateway_ids"), 3)
 	require.NotEmpty(t, terraform.Output(t, opts, "vpn_source_prefix_list_id"))
+	require.NotEmpty(t, terraform.Output(t, opts, "s3_gateway_endpoint_id"))
+	require.NotEmpty(t, terraform.Output(t, opts, "dynamodb_gateway_endpoint_id"))
 }

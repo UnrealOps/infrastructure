@@ -5,13 +5,19 @@ ENV ?= dev
 USER ?= $(shell id -un)
 AWS_REGION ?=
 PKI_SECRET_NAME ?= unrealops/$(ENV)/openvpn/runtime
+CLUSTER_NAME ?= $(ENV)
+LORE_SECRET_NAME ?= unrealops/$(CLUSTER_NAME)/lore/runtime
+LORE_CA_OUTPUT ?= $(CLUSTER_NAME)-lore-ca.crt
 
 SUPPORTED_DIRS := \
 	terraform/modules/network \
 	terraform/modules/openvpn \
 	terraform/modules/eks \
 	terraform/modules/karpenter-infra \
+	terraform/modules/cluster-addons-infra \
 	terraform/modules/cluster-addons \
+	terraform/modules/lore-infra \
+	terraform/modules/lore-workload \
 	terraform/examples/complete/foundation \
 	terraform/examples/complete/addons
 
@@ -19,7 +25,7 @@ TRIVY_SKIP_DIRS := \
 	--tf-exclude-downloaded-modules \
 	--skip-dirs '**/.terraform'
 
-.PHONY: fmt fmt-check validate lint security test check test-live foundation-init addons-init vpn-pki-init vpn-client vpn-revoke
+.PHONY: fmt fmt-check validate lint security test check test-live foundation-init addons-init vpn-pki-init vpn-client vpn-revoke lore-pki-init lore-pki-rotate lore-ca
 
 fmt:
 	@for dir in $(SUPPORTED_DIRS); do [ ! -d "$$dir" ] || $(ENGINE) fmt "$$dir"; done
@@ -51,6 +57,9 @@ test-live:
 		for dir in \
 			terraform/examples/complete/foundation \
 			terraform/examples/complete/addons \
+			terraform/modules/cluster-addons-infra \
+			terraform/modules/lore-infra \
+			terraform/modules/lore-workload \
 			terraform/tests/fixtures/network \
 			terraform/tests/fixtures/openvpn; do \
 			rm -rf "$$dir/.terraform"; \
@@ -80,3 +89,14 @@ vpn-client:
 vpn-revoke:
 	@test -n "$(AWS_REGION)" || { echo "AWS_REGION is required" >&2; exit 1; }
 	scripts/openvpn-pki.sh revoke --environment "$(ENV)" --name "$(USER)" --region "$(AWS_REGION)" --secret-id "$(PKI_SECRET_NAME)"
+
+lore-pki-init:
+	@test -n "$(AWS_REGION)" || { echo "AWS_REGION is required" >&2; exit 1; }
+	scripts/lore-pki.sh init --cluster-name "$(CLUSTER_NAME)" --region "$(AWS_REGION)" --secret-id "$(LORE_SECRET_NAME)"
+
+lore-pki-rotate:
+	@test -n "$(AWS_REGION)" || { echo "AWS_REGION is required" >&2; exit 1; }
+	scripts/lore-pki.sh rotate --cluster-name "$(CLUSTER_NAME)" --region "$(AWS_REGION)" --secret-id "$(LORE_SECRET_NAME)"
+
+lore-ca:
+	scripts/lore-pki.sh export-ca --cluster-name "$(CLUSTER_NAME)" --output "$(LORE_CA_OUTPUT)"

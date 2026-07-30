@@ -156,7 +156,7 @@ module "vpc" {
   depends_on = [terraform_data.validation]
 }
 
-module "s3_endpoint" {
+module "gateway_endpoints" {
   source  = "terraform-aws-modules/vpc/aws//modules/vpc-endpoints"
   version = "6.6.1"
 
@@ -169,6 +169,14 @@ module "s3_endpoint" {
       route_table_ids = module.vpc.private_route_table_ids
       tags = {
         Name = "${var.name}-s3"
+      }
+    }
+    dynamodb = {
+      service         = "dynamodb"
+      service_type    = "Gateway"
+      route_table_ids = module.vpc.private_route_table_ids
+      tags = {
+        Name = "${var.name}-dynamodb"
       }
     }
   }

@@ -19,7 +19,10 @@ func TestSupportedModuleLayout(t *testing.T) {
 		"terraform/modules/openvpn",
 		"terraform/modules/eks",
 		"terraform/modules/karpenter-infra",
+		"terraform/modules/cluster-addons-infra",
 		"terraform/modules/cluster-addons",
+		"terraform/modules/lore-infra",
+		"terraform/modules/lore-workload",
 		"terraform/examples/complete/foundation",
 		"terraform/examples/complete/addons",
 	} {
@@ -30,6 +33,31 @@ func TestSupportedModuleLayout(t *testing.T) {
 		}
 		if !info.IsDir() {
 			t.Errorf("required path %s is not a directory", relativePath)
+		}
+	}
+}
+
+func TestLoreModulesDoNotConfigureProvidersOrBackends(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, relativePath := range []string{
+		"terraform/modules/cluster-addons-infra",
+		"terraform/modules/lore-infra",
+		"terraform/modules/lore-workload",
+	} {
+		matches, err := filepath.Glob(filepath.Join(root, relativePath, "*.tf"))
+		if err != nil {
+			t.Fatalf("glob %s: %v", relativePath, err)
+		}
+		for _, path := range matches {
+			contents, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read %s: %v", path, err)
+			}
+			for _, forbidden := range []string{`provider "`, `backend "`} {
+				if strings.Contains(string(contents), forbidden) {
+					t.Errorf("%s contains forbidden module configuration %q", path, forbidden)
+				}
+			}
 		}
 	}
 }

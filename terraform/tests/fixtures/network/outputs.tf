@@ -21,3 +21,11 @@ output "nat_gateway_ids" {
 output "vpn_source_prefix_list_id" {
   value = module.network.vpn_source_prefix_list_id
 }
+
+output "s3_gateway_endpoint_id" {
+  value = module.network.s3_gateway_endpoint_id
+}
+
+output "dynamodb_gateway_endpoint_id" {
+  value = module.network.dynamodb_gateway_endpoint_id
+}
