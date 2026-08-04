@@ -200,6 +200,9 @@ func TestLoreImageSupplyChainIsPinned(t *testing.T) {
 	}
 	for _, expected := range []string{
 		"runner: ubuntu-24.04-arm",
+		"Provision fat-LTO linker swap",
+		`sudo fallocate --length 16G "$SWAP_FILE"`,
+		`sudo swapon "$SWAP_FILE"`,
 		"push-by-digest=true",
 		"docker buildx imagetools create",
 		"provenance: mode=max",
