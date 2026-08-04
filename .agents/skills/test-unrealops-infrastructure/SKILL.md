@@ -29,8 +29,8 @@ For live tests, first read [references/acceptance-runbook.md](references/accepta
 To include the full Lore foundation, workload, TLS/QUIC, binary push/clone,
 deduplication, distributed-lock, tier-failover, AWS recovery, and default
 service-account credential-boundary checks, publish the
-pinned image to a stable repository in the same private ECR registry, install
-`crane`, and add both opt-in arguments:
+pinned image to a stable repository in the same private ECR registry and add
+both opt-in arguments:
 
 ```bash
 .agents/skills/test-unrealops-infrastructure/scripts/run-acceptance.sh \
@@ -43,13 +43,13 @@ pinned image to a stable repository in the same private ECR registry, install
   --confirm-billable
 ```
 
-The Lore client must be v0.8.5 from the pinned source. After foundation creates
-the run-specific repository, the test uses `crane` to mirror the complete
-multi-architecture source image and deploys the resulting destination digest.
-The wrapper also creates a separate encrypted Lore CA and deterministic runtime
-secret, passes the CA to the client without changing the host trust store, and
-includes that secret in the guarded cleanup audit. Omitting the two Lore
-arguments leaves the existing acceptance stack unchanged.
+The Lore client must be v0.8.5 from the pinned source. The test validates that
+the immutable source digest belongs to the authorized account and region and
+that its ECR manifest contains both supported Linux architectures, then deploys
+that digest directly. The wrapper also creates a separate encrypted Lore CA and
+deterministic runtime secret, passes the CA to the client without changing the
+host trust store, and includes that secret in the guarded cleanup audit.
+Omitting the two Lore arguments leaves the existing acceptance stack unchanged.
 
 On macOS, add `--openvpn-connect-cli "/Applications/OpenVPN Connect/OpenVPN Connect.app/Contents/MacOS/OpenVPN Connect"` when the unprivileged OpenVPN binary cannot create `utun`. This fallback was validated with OpenVPN Connect 3.6.0 and accepts version 3.6 or newer in the 3.x line; use a current 3.x release. It refuses to run while an app session already exists, imports one uniquely named temporary profile, launches the app minimized and waits for its warm process, then connects that exact profile with `--connect-shortcut=<id>`; it never changes the global `launch-options` setting. Cleanup disconnects the shortcut, quits and waits for the app, and removes only the exact imported profile ID. Keep OpenVPN Connect closed for the whole test.
 

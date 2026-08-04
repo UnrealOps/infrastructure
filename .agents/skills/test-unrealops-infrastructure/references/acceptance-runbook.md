@@ -14,15 +14,15 @@ The complete run is serialized and can take more than an hour. It creates billab
 
 The wrapper requires `aws`, OpenTofu or Terraform, Go, kubectl, OpenVPN, `curl`, `jq`, OpenSSL, `tar`, and a SHA-256 utility. The run ID must be at most 16 characters, lowercase alphanumeric/hyphen, and cannot start or end with a hyphen.
 
-Lore acceptance is explicitly opt-in and additionally requires `crane`, an
-executable Lore v0.8.5 client built from commit
+Lore acceptance is explicitly opt-in and additionally requires an executable
+Lore v0.8.5 client built from commit
 `2d86d1dda98bfc1575ac7a20a6ff8c7fbc760383`, and a prepublished immutable image
 in a stable repository within the authorized account and region's private ECR
 registry. Pass the client and source image with `--lore-client` and
-`--lore-image`. After foundation creates the run-specific ECR repository, the
-test mirrors and verifies both image platforms before applying add-ons. The
-wrapper creates the separate Lore CA and runtime secret only when both
-arguments are supplied.
+`--lore-image`. Before provisioning, the test reads the ECR manifest directly,
+verifies both Linux image platforms, and deploys the supplied digest without
+copying it. The wrapper creates the separate Lore CA and runtime secret only
+when both arguments are supplied.
 
 The wrapper refuses a pre-existing Terraform state in:
 

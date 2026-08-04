@@ -225,6 +225,28 @@ func TestLoreAddonsRejectMutableImageReferences(t *testing.T) {
 	assertFileContains(t, main, `!var.enable_lore || var.lore_image != null`)
 }
 
+func TestLoreAcceptanceImageParsing(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	image, ok := parseLoreECRImage("123456789012.dkr.ecr.us-west-2.amazonaws.com/stable/lore@sha256:" + digest)
+	if !ok {
+		t.Fatal("expected valid immutable private ECR image")
+	}
+	if image.accountID != "123456789012" || image.region != "us-west-2" ||
+		image.repository != "stable/lore" || image.digest != "sha256:"+digest {
+		t.Fatalf("unexpected parsed image: %#v", image)
+	}
+
+	for _, invalid := range []string{
+		"public.ecr.aws/example/lore@sha256:" + digest,
+		"123456789012.dkr.ecr.us-west-2.amazonaws.com/lore:latest",
+		"123456789012.dkr.ecr.us-west-2.amazonaws.com/lore@sha256:short",
+	} {
+		if _, ok := parseLoreECRImage(invalid); ok {
+			t.Errorf("expected image to be rejected: %s", invalid)
+		}
+	}
+}
+
 func TestLorePKIAndAcceptanceRemainExplicit(t *testing.T) {
 	root := repositoryRoot(t)
 	pki := filepath.Join(root, "scripts/lore-pki.sh")

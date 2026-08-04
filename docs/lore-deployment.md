@@ -98,9 +98,9 @@ keylessly signs the returned manifest digest. It never publishes `latest`.
 ## Acceptance testing
 
 The guarded acceptance wrapper preserves the existing non-Lore run unless Lore
-is explicitly enabled. To exercise the full two-tier path, install `crane` and
-provide an immutable source image from a stable repository in the same private
-ECR registry plus an executable Lore v0.8.5 client built from the revision in
+is explicitly enabled. To exercise the full two-tier path, provide an immutable
+source image from a stable repository in the same private ECR registry plus an
+executable Lore v0.8.5 client built from the revision in
 `docker/lore/source.env`:
 
 ```bash
@@ -114,15 +114,15 @@ ECR registry plus an executable Lore v0.8.5 client built from the revision in
   --confirm-billable
 ```
 
-After foundation creates the run-specific repository, the test mirrors and
-verifies both image platforms, then deploys the destination digest. The wrapper
-creates an isolated encrypted Lore CA and runtime secret, verifies the AWS
-storage and private-endpoint controls, exercises TLS and QUIC, pushes and clones
-a binary tree, checks fragment deduplication and shared locks, disrupts a write
-replica during a push, replaces an edge node, validates durable cache
-reconstruction, exercises S3 version recovery and DynamoDB PITR, and proves the
-default service account has no usable AWS workload credentials. It retains
-state, PKI, and secrets whenever cleanup cannot be proven.
+The test verifies through ECR that the supplied digest is in the authorized
+account and region and contains both Linux platforms, then deploys it directly.
+The wrapper creates an isolated encrypted Lore CA and runtime secret, verifies
+the AWS storage and private-endpoint controls, exercises TLS and QUIC, pushes
+and clones a binary tree, checks fragment deduplication and shared locks,
+disrupts a write replica during a push, replaces an edge node, validates durable
+cache reconstruction, exercises S3 version recovery and DynamoDB PITR, and
+proves the default service account has no usable AWS workload credentials. It
+retains state, PKI, and secrets whenever cleanup cannot be proven.
 
 ## Cost and rollback
 

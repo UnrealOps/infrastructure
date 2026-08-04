@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -23,14 +24,35 @@ import (
 )
 
 type loreAcceptanceConfig struct {
-	sourceImage       string
 	image             string
 	runtimeSecretName string
 	caFile            string
 	client            string
 }
 
-func loadLoreAcceptanceConfig(t *testing.T) *loreAcceptanceConfig {
+type loreECRImage struct {
+	accountID  string
+	region     string
+	repository string
+	digest     string
+}
+
+var loreECRImagePattern = regexp.MustCompile(`^([0-9]{12})\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com/([a-z0-9][a-z0-9/_-]*)@(sha256:[0-9a-f]{64})$`)
+
+func parseLoreECRImage(image string) (loreECRImage, bool) {
+	matches := loreECRImagePattern.FindStringSubmatch(image)
+	if matches == nil {
+		return loreECRImage{}, false
+	}
+	return loreECRImage{
+		accountID:  matches[1],
+		region:     matches[2],
+		repository: matches[3],
+		digest:     matches[4],
+	}, true
+}
+
+func loadLoreAcceptanceConfig(t *testing.T, region string) *loreAcceptanceConfig {
 	t.Helper()
 	image := os.Getenv("TEST_LORE_IMAGE")
 	related := []string{
@@ -47,14 +69,17 @@ func loadLoreAcceptanceConfig(t *testing.T) *loreAcceptanceConfig {
 	}
 
 	config := &loreAcceptanceConfig{
-		sourceImage:       image,
+		image:             image,
 		runtimeSecretName: requiredEnv(t, "TEST_LORE_RUNTIME_SECRET_NAME"),
 		caFile:            requiredEnv(t, "TEST_LORE_CA_FILE"),
 		client:            requiredEnv(t, "TEST_LORE_CLIENT"),
 	}
-	require.Regexp(t, `^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9][a-z0-9/_-]*@sha256:[0-9a-f]{64}$`, config.sourceImage)
-	_, err := exec.LookPath("crane")
-	require.NoError(t, err, "crane is required to mirror the Lore multi-architecture image into the acceptance repository")
+	parsedImage, ok := parseLoreECRImage(config.image)
+	require.True(t, ok, "TEST_LORE_IMAGE must be an immutable private ECR URI ending in @sha256:<64 lowercase hex characters>")
+	require.Equal(t, requiredEnv(t, "TEST_AWS_ACCOUNT_ID"), parsedImage.accountID,
+		"Lore acceptance image must be in the explicitly authorized AWS account")
+	require.Equal(t, region, parsedImage.region,
+		"Lore acceptance image must be in the explicitly authorized AWS region")
 	info, err := os.Stat(config.caFile)
 	require.NoError(t, err, "stat Lore acceptance CA")
 	require.False(t, info.IsDir(), "TEST_LORE_CA_FILE must be a file")
@@ -62,33 +87,17 @@ func loadLoreAcceptanceConfig(t *testing.T) *loreAcceptanceConfig {
 	require.NoError(t, err, "stat Lore client")
 	require.False(t, info.IsDir(), "TEST_LORE_CLIENT must be an executable file")
 	require.NotZero(t, info.Mode()&0o111, "TEST_LORE_CLIENT must be executable")
+	assertLoreAcceptanceImagePlatforms(t, region, parsedImage)
 	return config
 }
 
-func mirrorLoreAcceptanceImage(t *testing.T, region, sourceImage, destinationRepository string) string {
+func assertLoreAcceptanceImagePlatforms(t *testing.T, region string, image loreECRImage) {
 	t.Helper()
-	sourceRegistry := strings.SplitN(sourceImage, "/", 2)[0]
-	destinationRegistry := strings.SplitN(destinationRepository, "/", 2)[0]
-	require.Equal(t, destinationRegistry, sourceRegistry,
-		"Lore acceptance source image must be in the authorized account and region's private ECR registry")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
-	password, err := runCommandE(ctx, nil, "aws", "--region", region, "ecr", "get-login-password")
-	require.NoError(t, err, "get isolated ECR authentication token")
-	commandEnvironment := append(os.Environ(), "DOCKER_CONFIG="+t.TempDir())
-	runAcceptanceCommand(t, ctx, commandEnvironment, []byte(password), "",
-		"crane", "auth", "login", destinationRegistry, "--username", "AWS", "--password-stdin")
-
-	destinationTag := destinationRepository + ":acceptance-" + os.Getenv("TEST_RUN_ID")
-	runAcceptanceCommand(t, ctx, commandEnvironment, nil, "",
-		"crane", "copy", sourceImage, destinationTag)
-	digest := strings.TrimSpace(runAcceptanceCommand(t, ctx, commandEnvironment, nil, "",
-		"crane", "digest", destinationTag))
-	require.Regexp(t, `^sha256:[0-9a-f]{64}$`, digest)
-
-	manifest := runAcceptanceCommand(t, ctx, commandEnvironment, nil, "",
-		"crane", "manifest", destinationTag)
+	manifest := awsText(t, region, "ecr", "batch-get-image",
+		"--repository-name", image.repository,
+		"--image-ids", "imageDigest="+image.digest,
+		"--query", "images[0].imageManifest")
+	require.NotEqual(t, "None", manifest, "Lore acceptance image digest was not found in ECR")
 	var imageIndex struct {
 		Manifests []struct {
 			Platform struct {
@@ -104,9 +113,8 @@ func mirrorLoreAcceptanceImage(t *testing.T, region, sourceImage, destinationRep
 			platforms[entry.Platform.Architecture] = true
 		}
 	}
-	require.True(t, platforms["amd64"], "mirrored Lore image is missing linux/amd64")
-	require.True(t, platforms["arm64"], "mirrored Lore image is missing linux/arm64")
-	return destinationRepository + "@" + digest
+	require.True(t, platforms["amd64"], "Lore acceptance image is missing linux/amd64")
+	require.True(t, platforms["arm64"], "Lore acceptance image is missing linux/arm64")
 }
 
 func assertLoreFoundation(t *testing.T, region, clusterName string, foundation *terraform.Options) {
@@ -632,27 +640,6 @@ func runLore(t *testing.T, config *loreAcceptanceConfig, directory string, argum
 	)
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, "lore %s: %s", strings.Join(arguments, " "), output)
-	return string(output)
-}
-
-func runAcceptanceCommand(
-	t *testing.T,
-	ctx context.Context,
-	environment []string,
-	stdin []byte,
-	directory string,
-	name string,
-	arguments ...string,
-) string {
-	t.Helper()
-	command := exec.CommandContext(ctx, name, arguments...)
-	command.Env = environment
-	command.Dir = directory
-	if stdin != nil {
-		command.Stdin = strings.NewReader(string(stdin))
-	}
-	output, err := command.CombinedOutput()
-	require.NoError(t, err, "%s %s: %s", name, strings.Join(arguments, " "), output)
 	return string(output)
 }
 
