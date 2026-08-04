@@ -190,8 +190,8 @@ func TestLoreImageSupplyChainIsPinned(t *testing.T) {
 		assertFileContains(t, source, expected)
 	}
 	for _, expected := range []string{
-		"FROM rust:slim-trixie@sha256:",
-		"FROM debian:trixie-slim@sha256:",
+		"FROM rust:slim-bookworm@sha256:",
+		"FROM ubuntu:24.04@sha256:",
 		"libprotobuf-dev",
 		"cargo build --locked --profile release-lto --bin loreserver",
 		"USER 65532:65532",
@@ -199,11 +199,13 @@ func TestLoreImageSupplyChainIsPinned(t *testing.T) {
 		assertFileContains(t, dockerfile, expected)
 	}
 	for _, expected := range []string{
-		"platforms: linux/amd64,linux/arm64",
+		"runner: ubuntu-24.04-arm",
+		"push-by-digest=true",
+		"docker buildx imagetools create",
 		"provenance: mode=max",
 		"sbom: true",
 		"cosign sign --yes",
-		"${{ steps.repository.outputs.uri }}:${{ env.LORE_IMAGE_VERSION }}",
+		`--tag "${IMAGE_URI}:${LORE_IMAGE_VERSION}"`,
 	} {
 		assertFileContains(t, workflow, expected)
 	}
