@@ -14,15 +14,14 @@ With `TF_ACC` unset, `go test ./...` runs contract tests and skips live tests. P
 Add `--lore-image <private-ecr-uri>@sha256:<digest>` and
 `--lore-client /absolute/path/to/lore` together to enable the Lore live path.
 The immutable source image must be in a stable repository in the same private
-ECR registry, and `crane` must be installed. The test mirrors the full
-multi-architecture manifest into the run-specific repository created by
-foundation, then provisions a separate encrypted Lore CA and runtime secret,
-enables the complete two-tier stack, validates the AWS controls and private
-endpoint, pushes and clones binary content, checks deduplication and locks,
-disrupts both tiers, exercises S3 version recovery and DynamoDB PITR, and
-checks the default service-account credential boundary. Omitting both flags preserves the existing non-Lore
-acceptance run. The client must be v0.8.5 built from the source revision pinned
-in `docker/lore/source.env`.
+ECR registry. The test validates the digest and both Linux platforms through
+ECR, deploys that digest directly, provisions a separate encrypted Lore CA and
+runtime secret, enables the complete two-tier stack, validates the AWS controls
+and private endpoint, pushes and clones binary content, checks deduplication and
+locks, disrupts both tiers, exercises S3 version recovery and DynamoDB PITR,
+and checks the default service-account credential boundary. Omitting both flags
+preserves the existing non-Lore acceptance run. The client must be v0.8.5 built
+from the source revision pinned in `docker/lore/source.env`.
 
 On macOS, pass `--openvpn-connect-cli "/Applications/OpenVPN Connect/OpenVPN Connect.app/Contents/MacOS/OpenVPN Connect"` when an unprivileged `openvpn` process cannot create a `utun` interface. The fallback was validated with OpenVPN Connect 3.6.0 and accepts version 3.6 or newer in the 3.x line; use a current 3.x release. Close OpenVPN Connect before starting and do not interact with it during the run. The test imports one uniquely named temporary profile, starts the app minimized, waits for the warm IPC host, and sends `--connect-shortcut=<id>` for that exact profile. It does not mutate `launch-options` or another global setting. Cleanup disconnects the shortcut, quits and waits for the app, then removes only the imported profile ID.
 

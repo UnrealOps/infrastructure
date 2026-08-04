@@ -22,7 +22,7 @@ import (
 
 func TestCompleteStack(t *testing.T) {
 	region := requireAcc(t)
-	lore := loadLoreAcceptanceConfig(t)
+	lore := loadLoreAcceptanceConfig(t, region)
 	secretARN := requiredEnv(t, "TEST_COMPLETE_OPENVPN_RUNTIME_SECRET_ARN")
 	profile := requiredEnv(t, "TEST_COMPLETE_OPENVPN_PROFILE")
 	profileContents, err := os.ReadFile(profile)
@@ -64,12 +64,6 @@ func TestCompleteStack(t *testing.T) {
 	t.Logf("UNREALOPS_ACCEPTANCE_KMS_KEY_ARN=%s", terraform.Output(t, foundation, "cluster_kms_key_arn"))
 	if lore != nil {
 		t.Logf("UNREALOPS_ACCEPTANCE_LORE_KMS_KEY_ARN=%s", terraform.Output(t, foundation, "lore_kms_key_arn"))
-		lore.image = mirrorLoreAcceptanceImage(
-			t,
-			region,
-			lore.sourceImage,
-			terraform.Output(t, foundation, "lore_ecr_repository_url"),
-		)
 	}
 
 	expectedClusterVersion := terraform.Output(t, foundation, "cluster_version")

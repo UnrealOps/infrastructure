@@ -94,6 +94,8 @@ if [[ -n "$lore_image" || -n "$lore_client" ]]; then
 		die "--lore-image and --lore-client must be supplied together"
 	[[ "$lore_image" =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9][a-z0-9/_-]*@sha256:[0-9a-f]{64}$ ]] ||
 		die "--lore-image must be an immutable private ECR URI ending in @sha256:<64 lowercase hex characters>"
+	[[ "${lore_image%%/*}" == "${account_id}.dkr.ecr.${region}.amazonaws.com" ]] ||
+		die "--lore-image must be in the explicitly authorized AWS account and region's private ECR registry"
 	[[ -x "$lore_client" ]] || die "--lore-client must point to an executable Lore v0.8.5 client"
 fi
 
@@ -182,9 +184,6 @@ done
 for command in aws "$engine" go kubectl openvpn curl jq openssl tar make tflint trivy; do
 	require_command "$command"
 done
-if [[ -n "$lore_image" ]]; then
-	require_command crane
-fi
 command -v sha256sum >/dev/null 2>&1 || require_command shasum
 [[ -z "$connect_cli" || -x "$connect_cli" ]] || die "OpenVPN Connect CLI is not executable: $connect_cli"
 
