@@ -1,24 +1,29 @@
 # syntax=docker/dockerfile:1.18@sha256:dabfc0969b935b2080555ace70ee69a5261af8a8f1b4df97b9e7fbcf6722eddf
 
-FROM rust:slim-bookworm@sha256:99e09cb2284e2ddbb73a995deee3e91783fd04d177602ccf6eab326d778ee777 AS builder
+ARG BUILDPLATFORM
+ARG TARGETARCH
 
-RUN apt-get update \
-    && apt-get install --yes --no-install-recommends \
-        build-essential \
-        ca-certificates \
-        libprotobuf-dev \
-        protobuf-compiler \
-    && rm -rf /var/lib/apt/lists/*
+FROM scratch AS release-amd64
+ADD --checksum=sha256:e14eeaca47aef92a65f70a1112507f9651e5459d9c6a34be2a41ba8043e89b30 \
+    https://github.com/EpicGames/lore/releases/download/v0.8.5/loreserver-v0.8.5-x86_64-unknown-linux-gnu.tar.gz \
+    /loreserver.tar.gz
 
-WORKDIR /build
-COPY --from=lore-source . .
+FROM scratch AS release-arm64
+ADD --checksum=sha256:02a0e47c672748136b2467efe65961685f5cfb7a341dae0115e0564e3a6ec91d \
+    https://github.com/EpicGames/lore/releases/download/v0.8.5/loreserver-v0.8.5-aarch64-unknown-linux-gnu-neoverse-512tvb.tar.gz \
+    /loreserver.tar.gz
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/build/target \
-    cargo build --locked --profile release-lto --bin loreserver \
-    && cp /build/target/release-lto/loreserver /tmp/loreserver \
-    && strip /tmp/loreserver
+FROM release-${TARGETARCH} AS release-archive
+
+FROM --platform=${BUILDPLATFORM} ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea AS release
+
+COPY --from=release-archive /loreserver.tar.gz /tmp/loreserver.tar.gz
+
+RUN mkdir -p /tmp/release /out/licenses \
+    && tar --extract --gzip --file /tmp/loreserver.tar.gz --directory /tmp/release \
+    && install --mode 0555 /tmp/release/loreserver /out/loreserver \
+    && install --mode 0444 /tmp/release/LICENSE.txt /out/licenses/LICENSE.txt \
+    && install --mode 0444 /tmp/release/THIRD-PARTY-NOTICES.txt /out/licenses/THIRD-PARTY-NOTICES.txt
 
 FROM ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
 
@@ -31,7 +36,9 @@ LABEL org.opencontainers.image.title="UnrealOps Lore Server" \
       org.opencontainers.image.source="${LORE_SOURCE}" \
       org.opencontainers.image.revision="${LORE_REVISION}" \
       org.opencontainers.image.version="${LORE_VERSION}-unrealops.1" \
-      org.opencontainers.image.licenses="MIT"
+      org.opencontainers.image.licenses="MIT" \
+      com.unrealops.lore.release.amd64.sha256="e14eeaca47aef92a65f70a1112507f9651e5459d9c6a34be2a41ba8043e89b30" \
+      com.unrealops.lore.release.arm64.sha256="02a0e47c672748136b2467efe65961685f5cfb7a341dae0115e0564e3a6ec91d"
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
@@ -42,7 +49,8 @@ RUN apt-get update \
     && mkdir -p /etc/lore/config /etc/lore/certs /var/lib/lore /tmp/lore \
     && chown -R 65532:65532 /var/lib/lore /tmp/lore
 
-COPY --from=builder --chown=65532:65532 /tmp/loreserver /usr/local/bin/loreserver
+COPY --from=release --chown=65532:65532 /out/loreserver /usr/local/bin/loreserver
+COPY --from=release /out/licenses /usr/share/doc/lore
 COPY --chown=65532:65532 entrypoint.sh /usr/local/bin/lore-entrypoint
 
 ENV LORE_CONFIG_PATH=/etc/lore/config \

@@ -186,23 +186,28 @@ func TestLoreImageSupplyChainIsPinned(t *testing.T) {
 		"2d86d1dda98bfc1575ac7a20a6ff8c7fbc760383",
 		"LORE_VERSION=0.8.5",
 		"LORE_IMAGE_VERSION=0.8.5-unrealops.1",
+		"LORE_SERVER_AMD64_SHA256=e14eeaca47aef92a65f70a1112507f9651e5459d9c6a34be2a41ba8043e89b30",
+		"LORE_SERVER_ARM64_SHA256=02a0e47c672748136b2467efe65961685f5cfb7a341dae0115e0564e3a6ec91d",
 	} {
 		assertFileContains(t, source, expected)
 	}
 	for _, expected := range []string{
-		"FROM rust:slim-bookworm@sha256:",
+		"FROM scratch AS release-amd64",
+		"FROM scratch AS release-arm64",
 		"FROM ubuntu:24.04@sha256:",
-		"libprotobuf-dev",
-		"cargo build --locked --profile release-lto --bin loreserver",
+		"ADD --checksum=sha256:e14eeaca47aef92a65f70a1112507f9651e5459d9c6a34be2a41ba8043e89b30",
+		"ADD --checksum=sha256:02a0e47c672748136b2467efe65961685f5cfb7a341dae0115e0564e3a6ec91d",
+		"loreserver-v0.8.5-x86_64-unknown-linux-gnu.tar.gz",
+		"loreserver-v0.8.5-aarch64-unknown-linux-gnu-neoverse-512tvb.tar.gz",
+		"COPY --from=release /out/licenses /usr/share/doc/lore",
 		"USER 65532:65532",
 	} {
 		assertFileContains(t, dockerfile, expected)
 	}
 	for _, expected := range []string{
 		"runner: ubuntu-24.04-arm",
-		"Provision fat-LTO linker swap",
-		`sudo fallocate --length 16G "$SWAP_FILE"`,
-		`sudo swapon "$SWAP_FILE"`,
+		"Package verified Epic Lore release",
+		"/usr/local/bin/loreserver lore:verify-${{ matrix.arch }} --version",
 		"push-by-digest=true",
 		"docker buildx imagetools create",
 		"provenance: mode=max",
@@ -219,6 +224,21 @@ func TestLoreImageSupplyChainIsPinned(t *testing.T) {
 	}
 	if strings.Contains(string(workflowContents), ":latest") {
 		t.Error("Lore image workflow must never publish latest")
+	}
+
+	dockerfileContents, err := os.ReadFile(dockerfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"FROM rust:", "cargo build", "COPY --from=lore-source"} {
+		if strings.Contains(string(dockerfileContents), forbidden) {
+			t.Errorf("Lore image must package Epic's release binary and must not contain %q", forbidden)
+		}
+	}
+	for _, forbidden := range []string{"Provision fat-LTO linker swap", "lore-source="} {
+		if strings.Contains(string(workflowContents), forbidden) {
+			t.Errorf("Lore image workflow must not contain obsolete source-build setting %q", forbidden)
+		}
 	}
 }
 

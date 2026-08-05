@@ -32,28 +32,16 @@ jobs:
             runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provision fat-LTO linker swap
-        env:
-          SWAP_FILE: ${{ runner.temp }}/lore-linker.swap
-        run: |
-          set -euo pipefail
-          sudo fallocate --length 16G "$SWAP_FILE"
-          sudo chmod 600 "$SWAP_FILE"
-          sudo mkswap "$SWAP_FILE"
-          sudo swapon "$SWAP_FILE"
-          free --human
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
           version: v0.72.0
           cache: false
-      - name: Build pinned Lore source
+      - name: Package verified Epic Lore release
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: docker/lore
           file: docker/lore/Dockerfile
-          build-contexts: |
-            lore-source=${{ env.LORE_SOURCE }}.git#${{ env.LORE_REVISION }}
           build-args: |
             LORE_VERSION=${{ env.LORE_VERSION }}
             LORE_REVISION=${{ env.LORE_REVISION }}
@@ -68,6 +56,7 @@ jobs:
           set -euo pipefail
           test "$(docker image inspect lore:verify-${{ matrix.arch }} --format '{{.Config.User}}')" = "65532:65532"
           test "$(docker image inspect lore:verify-${{ matrix.arch }} --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$LORE_REVISION"
+          docker run --rm --entrypoint /usr/local/bin/loreserver lore:verify-${{ matrix.arch }} --version | grep -F "$LORE_VERSION"
       - name: Smoke test health endpoint
         if: matrix.arch == 'amd64'
         run: |
@@ -116,16 +105,6 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provision fat-LTO linker swap
-        env:
-          SWAP_FILE: ${{ runner.temp }}/lore-linker.swap
-        run: |
-          set -euo pipefail
-          sudo fallocate --length 16G "$SWAP_FILE"
-          sudo chmod 600 "$SWAP_FILE"
-          sudo mkswap "$SWAP_FILE"
-          sudo swapon "$SWAP_FILE"
-          free --human
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
@@ -153,8 +132,6 @@ jobs:
         with:
           context: docker/lore
           file: docker/lore/Dockerfile
-          build-contexts: |
-            lore-source=${{ env.LORE_SOURCE }}.git#${{ env.LORE_REVISION }}
           build-args: |
             LORE_VERSION=${{ env.LORE_VERSION }}
             LORE_REVISION=${{ env.LORE_REVISION }}
