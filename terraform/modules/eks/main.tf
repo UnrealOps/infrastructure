@@ -110,33 +110,21 @@ locals {
     }
   }
 
-  lore_observability_addon = var.enable_lore_observability ? {
-    amazon-cloudwatch-observability = {
-      addon_version = local.cluster_addon_versions.cloudwatch_observability
-      configuration_values = jsonencode({
-        containerInsights = {
-          enabled = false
-        }
-        otelContainerInsights = {
-          enabled = true
-        }
-        manager = {
-          applicationSignals = {
-            autoMonitor = {
-              monitorAllServices = false
-            }
-          }
-        }
-      })
-      most_recent                 = false
-      resolve_conflicts_on_create = "OVERWRITE"
-      resolve_conflicts_on_update = "OVERWRITE"
-      pod_identity_association = [{
-        role_arn        = aws_iam_role.cloudwatch_observability[0].arn
-        service_account = "cloudwatch-agent"
-      }]
+  cloudwatch_observability_configuration = jsonencode({
+    containerInsights = {
+      enabled = false
     }
-  } : {}
+    otelContainerInsights = {
+      enabled = true
+    }
+    manager = {
+      applicationSignals = {
+        autoMonitor = {
+          monitorAllServices = false
+        }
+      }
+    }
+  })
 }
 
 resource "aws_cloudwatch_log_group" "container_insights" {
@@ -197,7 +185,7 @@ module "eks" {
     }
   }
 
-  addons = merge(local.cluster_addons, local.lore_observability_addon)
+  addons = local.cluster_addons
 
   eks_managed_node_groups = {
     system = {
@@ -260,6 +248,30 @@ module "eks" {
   })
 
   tags = var.tags
+}
 
-  depends_on = [aws_cloudwatch_log_group.container_insights]
+resource "aws_eks_addon" "cloudwatch_observability" {
+  count = var.enable_lore_observability ? 1 : 0
+
+  cluster_name         = module.eks.cluster_name
+  addon_name           = "amazon-cloudwatch-observability"
+  addon_version        = local.cluster_addon_versions.cloudwatch_observability
+  configuration_values = local.cloudwatch_observability_configuration
+
+  pod_identity_association {
+    role_arn        = aws_iam_role.cloudwatch_observability[0].arn
+    service_account = "cloudwatch-agent"
+  }
+
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "OVERWRITE"
+
+  tags = var.tags
+
+  depends_on = [
+    module.eks,
+    aws_cloudwatch_log_group.container_insights,
+    aws_iam_role_policy_attachment.cloudwatch_agent,
+    aws_iam_role_policy_attachment.cloudwatch_xray,
+  ]
 }

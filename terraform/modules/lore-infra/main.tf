@@ -6,7 +6,16 @@ data "aws_secretsmanager_secret" "runtime" {
 }
 
 locals {
-  bucket_name = "${var.cluster_name}-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.region}-lore-fragments"
+  bucket_name_seed                 = "${var.cluster_name}-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.region}-lore-fragments"
+  bucket_cluster_prefix_max_length = 30 - length(data.aws_region.current.region)
+  bucket_cluster_prefix            = substr(var.cluster_name, 0, min(length(var.cluster_name), local.bucket_cluster_prefix_max_length))
+  bucket_name = length(local.bucket_name_seed) <= 63 ? local.bucket_name_seed : format(
+    "%s-%s-%s-%s-fragments",
+    local.bucket_cluster_prefix,
+    data.aws_caller_identity.current.account_id,
+    data.aws_region.current.region,
+    substr(sha256(local.bucket_name_seed), 0, 8),
+  )
   table_names = {
     fragments         = "${var.cluster_name}-lore-fragments"
     fragment_metadata = "${var.cluster_name}-lore-fragment-metadata"

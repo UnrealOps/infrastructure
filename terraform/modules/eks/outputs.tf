@@ -60,7 +60,12 @@ output "system_node_group" {
 
 output "cluster_addons" {
   description = "Attributes of the managed EKS add-ons."
-  value       = module.eks.cluster_addons
+  value = merge(
+    module.eks.cluster_addons,
+    var.enable_lore_observability ? {
+      amazon-cloudwatch-observability = aws_eks_addon.cloudwatch_observability[0]
+    } : {},
+  )
 }
 
 output "cluster_addon_versions" {
