@@ -13,6 +13,10 @@ func TestLoreFoundationContracts(t *testing.T) {
 	eks := filepath.Join(root, "terraform/modules/eks/main.tf")
 
 	for _, expected := range []string{
+		`bucket_name_seed`,
+		`bucket_cluster_prefix_max_length = 30 - length(data.aws_region.current.region)`,
+		`length(local.bucket_name_seed) <= 63`,
+		`substr(sha256(local.bucket_name_seed), 0, 8)`,
 		`image_tag_mutability = "IMMUTABLE"`,
 		`scan_on_push = true`,
 		`encryption_type = "AES256"`,
@@ -50,7 +54,11 @@ func TestLoreFoundationContracts(t *testing.T) {
 		`"host"`,
 		`"performance"`,
 		`name              = "/aws/containerinsights/${var.cluster_name}/${each.value}"`,
-		`depends_on = [aws_cloudwatch_log_group.container_insights]`,
+		`resource "aws_eks_addon" "cloudwatch_observability"`,
+		`addon_name           = "amazon-cloudwatch-observability"`,
+		`aws_cloudwatch_log_group.container_insights,`,
+		`aws_iam_role_policy_attachment.cloudwatch_agent,`,
+		`aws_iam_role_policy_attachment.cloudwatch_xray,`,
 	} {
 		assertFileContains(t, eks, expected)
 	}
