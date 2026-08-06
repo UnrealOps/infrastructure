@@ -23,6 +23,11 @@ variable "vpc_cidr" {
   }
 }
 
+variable "node_security_group_id" {
+  description = "Shared EKS node security group that requires Lore replication ingress between nodes."
+  type        = string
+}
+
 variable "vpn_source_prefix_list_id" {
   description = "Customer-managed prefix list containing the OpenVPN appliance source subnets."
   type        = string

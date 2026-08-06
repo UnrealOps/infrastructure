@@ -232,6 +232,14 @@ resource "helm_release" "secrets_store_csi_provider_aws" {
 
   values = [yamlencode({
     awsRegion = var.aws_region
+    tolerations = [
+      {
+        key      = "unrealops.io/lore-edge"
+        operator = "Equal"
+        value    = "true"
+        effect   = "NoSchedule"
+      },
+    ]
     secrets-store-csi-driver = {
       install = false
     }

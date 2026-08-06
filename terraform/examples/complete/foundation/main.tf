@@ -80,6 +80,7 @@ module "lore_infra" {
   cluster_name              = module.eks.cluster_name
   vpc_id                    = module.network.vpc_id
   vpc_cidr                  = module.network.vpc_cidr
+  node_security_group_id    = module.eks.node_security_group_id
   vpn_source_prefix_list_id = module.network.vpn_source_prefix_list_id
   runtime_secret_name       = local.lore_runtime_secret_name
   deletion_protection       = var.lore_deletion_protection

@@ -73,7 +73,8 @@ locals {
 
 resource "terraform_data" "validation" {
   input = {
-    image_repository = local.image_repository
+    cluster_dependencies_ready = var.cluster_dependencies_ready
+    image_repository           = local.image_repository
   }
 
   lifecycle {
