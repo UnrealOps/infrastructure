@@ -116,7 +116,7 @@ variable "access_entries" {
 }
 
 variable "enable_cluster_creator_admin_permissions" {
-  description = "Grant the Terraform caller cluster-admin through an EKS access entry. Disable after adding durable administrative access entries."
+  description = "Grant the Terraform caller cluster-admin through an EKS access entry. Automatically suppressed when the caller already has a durable access_entries entry; otherwise disable after adding durable administrative access."
   type        = bool
   default     = true
 }

@@ -1,4 +1,9 @@
 data "aws_partition" "current" {}
+data "aws_caller_identity" "current" {}
+
+data "aws_iam_session_context" "current" {
+  arn = data.aws_caller_identity.current.arn
+}
 
 data "aws_iam_policy_document" "ebs_csi_assume_role" {
   statement {
@@ -63,6 +68,11 @@ resource "aws_iam_role_policy_attachment" "cloudwatch_xray" {
 
 locals {
   control_plane_subnet_ids = length(var.control_plane_subnet_ids) > 0 ? var.control_plane_subnet_ids : var.private_subnet_ids
+  caller_principal_arn     = data.aws_iam_session_context.current.issuer_arn
+  caller_has_access_entry = anytrue([
+    for entry in values(var.access_entries) : entry.principal_arn == local.caller_principal_arn
+  ])
+  enable_cluster_creator_admin_permissions = var.enable_cluster_creator_admin_permissions && !local.caller_has_access_entry
   container_insights_log_group_suffixes = toset([
     "application",
     "dataplane",
@@ -144,7 +154,7 @@ module "eks" {
   kubernetes_version = local.cluster_version
 
   authentication_mode                      = "API"
-  enable_cluster_creator_admin_permissions = var.enable_cluster_creator_admin_permissions
+  enable_cluster_creator_admin_permissions = local.enable_cluster_creator_admin_permissions
   access_entries                           = var.access_entries
 
   endpoint_private_access = true
