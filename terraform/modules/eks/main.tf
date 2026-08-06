@@ -146,6 +146,15 @@ resource "aws_cloudwatch_log_group" "container_insights" {
   tags = var.tags
 }
 
+resource "aws_cloudwatch_log_group" "otel_container_insights_application" {
+  count = var.enable_lore_observability ? 1 : 0
+
+  name              = "/aws/otel/containerinsights/${var.cluster_name}/application"
+  retention_in_days = var.cloudwatch_log_retention_days
+
+  tags = var.tags
+}
+
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "21.24.0"
@@ -281,6 +290,7 @@ resource "aws_eks_addon" "cloudwatch_observability" {
   depends_on = [
     module.eks,
     aws_cloudwatch_log_group.container_insights,
+    aws_cloudwatch_log_group.otel_container_insights_application,
     aws_iam_role_policy_attachment.cloudwatch_agent,
     aws_iam_role_policy_attachment.cloudwatch_xray,
   ]

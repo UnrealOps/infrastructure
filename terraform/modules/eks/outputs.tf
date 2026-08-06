@@ -90,5 +90,8 @@ output "cloudwatch_observability_pod_identity_role_arn" {
 
 output "container_insights_log_group_names" {
   description = "Terraform-managed Container Insights log groups, empty when Lore observability is disabled."
-  value       = { for suffix, log_group in aws_cloudwatch_log_group.container_insights : suffix => log_group.name }
+  value = merge(
+    { for suffix, log_group in aws_cloudwatch_log_group.container_insights : suffix => log_group.name },
+    { for _, log_group in aws_cloudwatch_log_group.otel_container_insights_application : "otel_application" => log_group.name },
+  )
 }

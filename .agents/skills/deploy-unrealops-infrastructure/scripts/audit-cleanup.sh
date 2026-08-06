@@ -15,6 +15,7 @@ Usage:
     --foundation-lineage UUID --addons-lineage UUID \
     (--no-route53-record | \
       --route53-zone-id ZONE_ID --route53-record-name VPN_DNS_NAME) \
+    [--retained-state-bucket-arn arn:aws:s3:::BUCKET] \
     [--allow-active-runtime-secret]
 
 Initialize both roots against their durable backends before running this audit.
@@ -41,6 +42,7 @@ foundation_lineage=""
 addons_lineage=""
 route53_zone_id=""
 route53_record_name=""
+retained_state_bucket_arn=""
 no_route53_record=false
 allow_active_runtime_secret=false
 
@@ -101,6 +103,11 @@ while (($#)); do
       route53_record_name="$2"
       shift 2
       ;;
+    --retained-state-bucket-arn)
+      (($# >= 2)) || die "$1 requires a value"
+      retained_state_bucket_arn="$2"
+      shift 2
+      ;;
     --no-route53-record)
       no_route53_record=true
       shift
@@ -147,6 +154,10 @@ for runtime_secret_id in "${runtime_secret_ids[@]}"; do
   [[ "$runtime_secret_id" == arn:*:secretsmanager:"$region":"$account_id":secret:* ]] ||
     die "--runtime-secret-id must be a Secrets Manager ARN in the expected account and region"
 done
+if [[ -n "$retained_state_bucket_arn" ]]; then
+  [[ "$retained_state_bucket_arn" == arn:aws:s3:::* ]] ||
+    die "--retained-state-bucket-arn must be an S3 bucket ARN"
+fi
 command -v aws >/dev/null 2>&1 || die "aws is required"
 command -v jq >/dev/null 2>&1 || die "jq is required"
 command -v "$engine" >/dev/null 2>&1 || die "$engine is required"
@@ -222,6 +233,16 @@ check_tagged_resources() {
     if array_contains "$arn" "${kms_key_ids[@]}" && kms_is_safe_remnant "$arn"; then
       continue
     fi
+    [[ -n "$retained_state_bucket_arn" && "$arn" == "$retained_state_bucket_arn" ]] &&
+      continue
+    case "$arn" in
+      arn:aws:ec2:"$region":"$account_id":* | arn:aws:eks:"$region":"$account_id":*)
+        # EC2 and EKS retain terminal entries in the Resource Groups Tagging
+        # API after their service APIs report deletion. The exact active-state
+        # checks below are authoritative for these resource families.
+        continue
+        ;;
+    esac
     record "tagged resource remains ($key=$value): $arn"
   done
 }
@@ -233,6 +254,11 @@ check_ec2_resources() {
     'Name=instance-state-name,Values=pending,running,shutting-down,stopping,stopped' \
     --query 'Reservations[].Instances[].InstanceId' --output text)"
   record_output "active EC2 instances ($key=$value)" "$output"
+
+  output="$(aws ec2 describe-fleets --region "$region" --filters \
+    "Name=tag:$key,Values=$value" \
+    --query 'Fleets[?FleetState!=`deleted`].FleetId' --output text)"
+  record_output "active EC2 fleets ($key=$value)" "$output"
 
   output="$(aws ec2 describe-volumes --region "$region" --filters "Name=tag:$key,Values=$value" \
     --query 'Volumes[].VolumeId' --output text)"
@@ -458,7 +484,13 @@ fi
 for log_group in \
   "/aws/eks/$environment/cluster" \
   "/unrealops/$environment/openvpn" \
-  "/aws/vpc-flow-log/$vpc_id"; do
+  "/aws/vpc-flow-log/$vpc_id" \
+  "/aws/containerinsights/$environment/application" \
+  "/aws/containerinsights/$environment/dataplane" \
+  "/aws/containerinsights/$environment/host" \
+  "/aws/containerinsights/$environment/performance" \
+  "/aws/otel/containerinsights/$environment/application" \
+  "/aws/lore/$environment/metrics"; do
   output="$(aws logs describe-log-groups --region "$region" --log-group-name-prefix "$log_group" \
     --query "logGroups[?logGroupName==\`$log_group\`].logGroupName" --output text)"
   record_output "CloudWatch log groups" "$output"
