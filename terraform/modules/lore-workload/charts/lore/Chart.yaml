@@ -2,5 +2,5 @@ apiVersion: v2
 name: lore
 description: Private two-tier Lore deployment for UnrealOps EKS
 type: application
-version: 0.1.0
+version: 0.1.3
 appVersion: "0.8.5-unrealops.1"
