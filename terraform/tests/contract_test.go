@@ -195,6 +195,22 @@ func TestBackendHelperAllowsOnlyLoreWorkloadAWSResourcesInAddonsState(t *testing
 	}
 }
 
+func TestCleanupAuditSupportsLoreKMSAndRuntimeSecret(t *testing.T) {
+	root := repositoryRoot(t)
+	audit := filepath.Join(root, ".agents/skills/deploy-unrealops-infrastructure/scripts/audit-cleanup.sh")
+
+	for _, expected := range []string{
+		`kms_key_ids+=("$2")`,
+		`runtime_secret_ids+=("$2")`,
+		`array_contains "$arn" "${kms_key_ids[@]}"`,
+		`"alias/$environment-lore"`,
+		`for kms_key_id in "${kms_key_ids[@]}"`,
+		`for runtime_secret_id in "${runtime_secret_ids[@]}"`,
+	} {
+		assertFileContains(t, audit, expected)
+	}
+}
+
 func parseHCLBody(t *testing.T, path string) *hclsyntax.Body {
 	t.Helper()
 	parser := hclparse.NewParser()
