@@ -436,6 +436,15 @@ resource "aws_vpc_security_group_egress_rule" "lore_udp" {
   to_port           = tonumber(each.value)
 }
 
+resource "aws_vpc_security_group_ingress_rule" "node_lore_replication" {
+  security_group_id            = var.node_security_group_id
+  description                  = "Lore edge-to-write mTLS QUIC replication"
+  referenced_security_group_id = var.node_security_group_id
+  ip_protocol                  = "udp"
+  from_port                    = 41340
+  to_port                      = 41340
+}
+
 data "aws_iam_policy_document" "pod_identity_assume_role" {
   statement {
     sid     = "EKSPodIdentity"

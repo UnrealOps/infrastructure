@@ -34,6 +34,10 @@ func TestLoreFoundationContracts(t *testing.T) {
 		`service_account = "lore-write"`,
 		`service_account = "lore-otel"`,
 		`prefix_list_id    = var.vpn_source_prefix_list_id`,
+		`resource "aws_vpc_security_group_ingress_rule" "node_lore_replication"`,
+		`referenced_security_group_id = var.node_security_group_id`,
+		`from_port                    = 41340`,
+		`to_port                      = 41340`,
 	} {
 		assertFileContains(t, infra, expected)
 	}
@@ -256,6 +260,39 @@ func TestLoreAddonsRejectMutableImageReferences(t *testing.T) {
 	main := filepath.Join(root, "terraform/examples/complete/addons/main.tf")
 	assertFileContains(t, variables, `@sha256:[0-9a-f]{64}`)
 	assertFileContains(t, main, `!var.enable_lore || var.lore_image != null`)
+}
+
+func TestLoreSecretsProviderRunsOnTaintedEdgeNodes(t *testing.T) {
+	root := repositoryRoot(t)
+	addons := filepath.Join(root, "terraform/modules/cluster-addons/main.tf")
+
+	for _, expected := range []string{
+		`key      = "unrealops.io/lore-edge"`,
+		`operator = "Equal"`,
+		`value    = "true"`,
+		`effect   = "NoSchedule"`,
+	} {
+		assertFileContains(t, addons, expected)
+	}
+}
+
+func TestLoreControllerDependencyDoesNotDeferFoundationDiscovery(t *testing.T) {
+	root := repositoryRoot(t)
+	addons := filepath.Join(root, "terraform/examples/complete/addons/main.tf")
+	clusterAddonsOutputs := filepath.Join(root, "terraform/modules/cluster-addons/outputs.tf")
+	workload := filepath.Join(root, "terraform/modules/lore-workload/main.tf")
+
+	assertFileContains(t, addons, `cluster_dependencies_ready = module.cluster_addons.lore_dependencies_ready`)
+	assertFileContains(t, clusterAddonsOutputs, `output "lore_dependencies_ready"`)
+	assertFileContains(t, workload, `cluster_dependencies_ready = var.cluster_dependencies_ready`)
+
+	contents, err := os.ReadFile(addons)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "module.cluster_addons,\n    terraform_data.lore_configuration") {
+		t.Error("Lore workload must not use a module-wide dependency on cluster-addons because it defers AWS discovery data and churns DNS")
+	}
 }
 
 func TestLoreAcceptanceImageParsing(t *testing.T) {

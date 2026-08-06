@@ -18,6 +18,16 @@ variable "image" {
   }
 }
 
+variable "cluster_dependencies_ready" {
+  description = "Dependency token from cluster-addons that gates only the Lore Helm release."
+  type        = bool
+
+  validation {
+    condition     = var.cluster_dependencies_ready
+    error_message = "Lore cluster dependencies must be enabled before deploying the workload."
+  }
+}
+
 variable "runtime_secret_name" {
   description = "Optional Lore runtime secret name override. Defaults to unrealops/<cluster_name>/lore/runtime."
   type        = string

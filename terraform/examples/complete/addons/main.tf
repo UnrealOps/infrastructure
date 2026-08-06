@@ -75,18 +75,16 @@ module "lore_workload" {
   count  = var.enable_lore ? 1 : 0
   source = "../../../modules/lore-workload"
 
-  cluster_name              = var.cluster_name
-  image                     = var.lore_image
-  runtime_secret_name       = var.lore_runtime_secret_name
-  edge_replicas             = var.lore_edge_replicas
-  write_replicas            = var.lore_write_replicas
-  edge_instance_types       = var.lore_edge_instance_types
-  edge_cache_max_size_bytes = var.lore_edge_cache_max_size_bytes
-  alarm_topic_arn           = var.lore_alarm_topic_arn
-  tags                      = var.tags
+  cluster_name               = var.cluster_name
+  cluster_dependencies_ready = module.cluster_addons.lore_dependencies_ready
+  image                      = var.lore_image
+  runtime_secret_name        = var.lore_runtime_secret_name
+  edge_replicas              = var.lore_edge_replicas
+  write_replicas             = var.lore_write_replicas
+  edge_instance_types        = var.lore_edge_instance_types
+  edge_cache_max_size_bytes  = var.lore_edge_cache_max_size_bytes
+  alarm_topic_arn            = var.lore_alarm_topic_arn
+  tags                       = var.tags
 
-  depends_on = [
-    module.cluster_addons,
-    terraform_data.lore_configuration,
-  ]
+  depends_on = [terraform_data.lore_configuration]
 }
