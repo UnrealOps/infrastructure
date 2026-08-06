@@ -206,6 +206,10 @@ func TestCleanupAuditSupportsLoreKMSAndRuntimeSecret(t *testing.T) {
 		`"alias/$environment-lore"`,
 		`for kms_key_id in "${kms_key_ids[@]}"`,
 		`for runtime_secret_id in "${runtime_secret_ids[@]}"`,
+		`--retained-state-bucket-arn`,
+		`aws ec2 describe-fleets`,
+		`arn:aws:ec2:"$region":"$account_id":* | arn:aws:eks:"$region":"$account_id":*`,
+		`"/aws/otel/containerinsights/$environment/application"`,
 	} {
 		assertFileContains(t, audit, expected)
 	}

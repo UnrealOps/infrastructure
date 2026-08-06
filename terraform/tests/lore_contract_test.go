@@ -60,9 +60,12 @@ func TestLoreFoundationContracts(t *testing.T) {
 		`"host"`,
 		`"performance"`,
 		`name              = "/aws/containerinsights/${var.cluster_name}/${each.value}"`,
+		`resource "aws_cloudwatch_log_group" "otel_container_insights_application"`,
+		`name              = "/aws/otel/containerinsights/${var.cluster_name}/application"`,
 		`resource "aws_eks_addon" "cloudwatch_observability"`,
 		`addon_name           = "amazon-cloudwatch-observability"`,
 		`aws_cloudwatch_log_group.container_insights,`,
+		`aws_cloudwatch_log_group.otel_container_insights_application,`,
 		`aws_iam_role_policy_attachment.cloudwatch_agent,`,
 		`aws_iam_role_policy_attachment.cloudwatch_xray,`,
 	} {
