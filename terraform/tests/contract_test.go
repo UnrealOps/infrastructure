@@ -96,6 +96,21 @@ func TestSupportedEKSWiring(t *testing.T) {
 	}
 }
 
+func TestEKSSuppressesDuplicateClusterCreatorAccessEntry(t *testing.T) {
+	root := repositoryRoot(t)
+	eks := filepath.Join(root, "terraform/modules/eks/main.tf")
+
+	for _, expected := range []string{
+		`data "aws_iam_session_context" "current"`,
+		`caller_principal_arn     = data.aws_iam_session_context.current.issuer_arn`,
+		`entry.principal_arn == local.caller_principal_arn`,
+		`var.enable_cluster_creator_admin_permissions && !local.caller_has_access_entry`,
+		`enable_cluster_creator_admin_permissions = local.enable_cluster_creator_admin_permissions`,
+	} {
+		assertFileContains(t, eks, expected)
+	}
+}
+
 func TestAddonsDiscoversFoundationFromAWS(t *testing.T) {
 	root := repositoryRoot(t)
 	addonsMain := filepath.Join(root, "terraform/examples/complete/addons/main.tf")
