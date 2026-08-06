@@ -238,8 +238,22 @@ if state_output="$("$engine" -chdir="$root_directory" state pull 2>"$state_error
     jq -e '[.resources[]? | select(.mode == "managed" and .type == "helm_release")] | length == 0' \
       <<<"$state_output" >/dev/null || die "foundation state contains add-ons resources"
   else
-    jq -e '[.resources[]? | select(.mode == "managed" and (.type | startswith("aws_")))] | length == 0' \
-      <<<"$state_output" >/dev/null || die "add-ons state contains foundation AWS resources"
+    jq -e '
+      [
+        .resources[]?
+        | select(.mode == "managed" and (.type | startswith("aws_")))
+        | .type as $resource_type
+        | select(
+            ((.module // "") | startswith("module.lore_workload")) | not or
+            ([
+              "aws_cloudwatch_dashboard",
+              "aws_cloudwatch_metric_alarm",
+              "aws_route53_record"
+            ] | index($resource_type) == null)
+          )
+      ] | length == 0
+    ' <<<"$state_output" >/dev/null ||
+      die "add-ons state contains AWS resources outside the Lore workload allowlist"
   fi
   printf 'Verified %s state lineage %s for environment %s.\n' \
     "$root_name" "$actual_lineage" "$environment"

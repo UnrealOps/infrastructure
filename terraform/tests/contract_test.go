@@ -180,6 +180,21 @@ func TestBackendHelperAcceptsOnlyEmptyLineagelessState(t *testing.T) {
 	}
 }
 
+func TestBackendHelperAllowsOnlyLoreWorkloadAWSResourcesInAddonsState(t *testing.T) {
+	root := repositoryRoot(t)
+	helper := filepath.Join(root, ".agents/skills/deploy-unrealops-infrastructure/scripts/init-backend.sh")
+
+	for _, expected := range []string{
+		`startswith("module.lore_workload")`,
+		`"aws_cloudwatch_dashboard"`,
+		`"aws_cloudwatch_metric_alarm"`,
+		`"aws_route53_record"`,
+		`add-ons state contains AWS resources outside the Lore workload allowlist`,
+	} {
+		assertFileContains(t, helper, expected)
+	}
+}
+
 func parseHCLBody(t *testing.T, path string) *hclsyntax.Body {
 	t.Helper()
 	parser := hclparse.NewParser()
