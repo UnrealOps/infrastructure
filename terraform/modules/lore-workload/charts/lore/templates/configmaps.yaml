@@ -68,10 +68,12 @@ data:
     jitter = 0.2
 
     [mutable_store]
-    mode = "remote"
+    mode = "aws"
 
-    [mutable_store.remote]
-    remote_url = "lores://lore-write.lore.svc.cluster.local:41337"
+    [plugins.aws.mutable_store]
+    dynamodb_table = {{ .Values.storage.mutableStoreTable | quote }}
+    dynamodb_region = {{ .Values.aws.region | quote }}
+    timeout_millis = 5000
 
     [lock_store]
     mode = "aws"

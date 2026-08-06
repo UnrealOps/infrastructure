@@ -60,7 +60,7 @@ locals {
   nlb_name            = substr("${var.cluster_name}-lore", 0, 32)
   endpoint_hostname   = "lore.${var.cluster_name}.internal"
   alarm_actions       = var.alarm_topic_arn == null ? [] : [var.alarm_topic_arn]
-  lore_chart_version  = "0.1.0"
+  lore_chart_version  = "0.1.3"
 
   common_tags = merge(var.tags, {
     ManagedBy             = "Terraform"
@@ -113,7 +113,8 @@ resource "helm_release" "lore" {
   wait_for_jobs   = true
 
   values = [yamlencode({
-    clusterName = var.cluster_name
+    chartVersion = local.lore_chart_version
+    clusterName  = var.cluster_name
     aws = {
       region   = data.aws_region.current.region
       vpcCidr  = data.aws_vpc.this.cidr_block
@@ -262,8 +263,8 @@ resource "aws_cloudwatch_dashboard" "lore" {
           region = data.aws_region.current.region
           view   = "timeSeries"
           metrics = [
-            ["UnrealOps/Lore", "lore_certificate_days_until_expiry", "cluster", var.cluster_name, "tier", "edge"],
-            [".", ".", ".", ".", ".", "write"],
+            ["UnrealOps/Lore", "lore_certificate_days_until_expiry", "cluster", var.cluster_name, "tier", "edge", "OTelLib", "unrealops.lore.certificates"],
+            [".", ".", ".", ".", ".", "write", ".", "."],
           ]
         }
       },
@@ -366,6 +367,7 @@ resource "aws_cloudwatch_metric_alarm" "certificate_expiry" {
   dimensions = {
     cluster = var.cluster_name
     tier    = each.value
+    OTelLib = "unrealops.lore.certificates"
   }
 
   tags = local.common_tags

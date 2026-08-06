@@ -486,6 +486,24 @@ resource "aws_iam_role" "otel" {
 
 data "aws_iam_policy_document" "edge" {
   statement {
+    sid = "MutableMetadata"
+    actions = [
+      "dynamodb:BatchGetItem",
+      "dynamodb:BatchWriteItem",
+      "dynamodb:DeleteItem",
+      "dynamodb:DescribeTable",
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:Query",
+      "dynamodb:Scan",
+      "dynamodb:TransactGetItems",
+      "dynamodb:TransactWriteItems",
+      "dynamodb:UpdateItem",
+    ]
+    resources = [aws_dynamodb_table.mutable_store.arn]
+  }
+
+  statement {
     sid = "DistributedLocks"
     actions = [
       "dynamodb:BatchGetItem",
@@ -510,6 +528,12 @@ data "aws_iam_policy_document" "edge" {
     sid       = "RuntimeCertificates"
     actions   = ["secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue"]
     resources = [data.aws_secretsmanager_secret.runtime.arn]
+  }
+
+  statement {
+    sid       = "LoreKMS"
+    actions   = ["kms:Decrypt", "kms:DescribeKey", "kms:GenerateDataKey"]
+    resources = [aws_kms_key.lore.arn]
   }
 }
 

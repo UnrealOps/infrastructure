@@ -25,6 +25,7 @@ spec:
         app.kubernetes.io/component: edge
       annotations:
         kubectl.kubernetes.io/default-container: lore
+        checksum/config: {{ include (print $.Template.BasePath "/configmaps.yaml") . | sha256sum }}
     spec:
       serviceAccountName: lore-edge
       automountServiceAccountToken: true
@@ -70,6 +71,8 @@ spec:
             - name: LORE_CA_CERT_FILE
               value: /etc/lore/certs/ca.crt
             - name: TMPDIR
+              value: /tmp
+            - name: HOME
               value: /tmp
           ports:
             - name: grpc

@@ -33,6 +33,8 @@ func TestLoreFoundationContracts(t *testing.T) {
 		`service_account = "lore-edge"`,
 		`service_account = "lore-write"`,
 		`service_account = "lore-otel"`,
+		`sid = "MutableMetadata"`,
+		`resources = [aws_dynamodb_table.mutable_store.arn]`,
 		`prefix_list_id    = var.vpn_source_prefix_list_id`,
 		`resource "aws_vpc_security_group_ingress_rule" "node_lore_replication"`,
 		`referenced_security_group_id = var.node_security_group_id`,
@@ -87,6 +89,18 @@ func TestLoreDynamoDBSchemasMatchPinnedSource(t *testing.T) {
 		`key_type       = "RANGE"`,
 	} {
 		assertFileContains(t, infra, expected)
+	}
+}
+
+func TestLoreEdgeCanUseEncryptedMutableAndLockTables(t *testing.T) {
+	root := repositoryRoot(t)
+	infra := filepath.Join(root, "terraform/modules/lore-infra/main.tf")
+	contents, err := os.ReadFile(infra)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(string(contents), `sid       = "LoreKMS"`); count != 2 {
+		t.Errorf("edge and write roles must each have scoped Lore KMS access, found %d statements", count)
 	}
 }
 
@@ -164,7 +178,6 @@ func TestLoreConfigurationUsesDurableTwoTierStores(t *testing.T) {
 
 	for _, expected := range []string{
 		`remote_url = "quics://lore-write.lore.svc.cluster.local:41340"`,
-		`remote_url = "lores://lore-write.lore.svc.cluster.local:41337"`,
 		`replication_mode = "read_write"`,
 		`cert_chain = "/etc/lore/certs/ca.crt"`,
 		`[plugins.aws.immutable_store]`,
@@ -181,11 +194,31 @@ func TestLoreConfigurationUsesDurableTwoTierStores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if strings.Contains(string(contents), `mode = "remote"`) {
+		t.Error("edge mutable metadata must use DynamoDB directly because Lore v0.8.5 remote mutable stores do not support list operations")
+	}
+	if count := strings.Count(string(contents), `[plugins.aws.mutable_store]`); count != 2 {
+		t.Errorf("edge and write tiers must each configure the AWS mutable store, found %d configurations", count)
+	}
 	for _, forbidden := range []string{"presigned_url_hmac_key", "[server.auth]", `mode = "local"\n\n    [lock_store]`} {
 		if strings.Contains(string(contents), forbidden) {
 			t.Errorf("Lore workload config must not contain %q", forbidden)
 		}
 	}
+}
+
+func TestLoreConfigChangesTriggerWorkloadRollouts(t *testing.T) {
+	root := repositoryRoot(t)
+	chart := filepath.Join(root, "terraform/modules/lore-workload/charts/lore/templates")
+	for _, workload := range []string{"edge.yaml", "write.yaml"} {
+		assertFileContains(t, filepath.Join(chart, workload), `checksum/config: {{ include (print $.Template.BasePath "/configmaps.yaml") . | sha256sum }}`)
+	}
+}
+
+func TestLoreCertificateAlarmsMatchEMFDimensions(t *testing.T) {
+	root := repositoryRoot(t)
+	workload := filepath.Join(root, "terraform/modules/lore-workload/main.tf")
+	assertFileContains(t, workload, `OTelLib = "unrealops.lore.certificates"`)
 }
 
 func TestLoreImageSupplyChainIsPinned(t *testing.T) {
