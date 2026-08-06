@@ -150,6 +150,21 @@ func TestKarpenterManifestsDoNotSetControllerOwnedTags(t *testing.T) {
 	}
 }
 
+func TestBackendHelperAcceptsOnlyEmptyLineagelessState(t *testing.T) {
+	root := repositoryRoot(t)
+	helper := filepath.Join(root, ".agents/skills/deploy-unrealops-infrastructure/scripts/init-backend.sh")
+
+	for _, expected := range []string{
+		`[[ "$allow_new_state" == "true" ]]`,
+		`.serial == 0`,
+		`(.outputs | type == "object" and length == 0)`,
+		`[.resources[]? | select(.mode == "managed")] | length) == 0`,
+		`state lacks a lineage but is not an empty new state`,
+	} {
+		assertFileContains(t, helper, expected)
+	}
+}
+
 func parseHCLBody(t *testing.T, path string) *hclsyntax.Body {
 	t.Helper()
 	parser := hclparse.NewParser()

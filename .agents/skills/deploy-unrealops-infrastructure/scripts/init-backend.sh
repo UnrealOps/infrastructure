@@ -202,8 +202,23 @@ trap - EXIT
 state_error="$(mktemp)"
 trap 'rm -f "$state_error"' EXIT
 if state_output="$("$engine" -chdir="$root_directory" state pull 2>"$state_error")"; then
-  actual_lineage="$(jq -er '.lineage | select(type == "string" and length > 0)' \
-    <<<"$state_output")" || die "$root_name state lacks a valid lineage"
+  actual_lineage="$(jq -er '.lineage | select(type == "string")' \
+    <<<"$state_output")" || die "$root_name state has an invalid lineage value"
+  if [[ -z "$actual_lineage" ]]; then
+    [[ "$allow_new_state" == "true" ]] ||
+      die "$root_name state lacks a valid lineage"
+    jq -e '
+      .serial == 0 and
+      (.outputs | type == "object" and length == 0) and
+      ([.resources[]? | select(.mode == "managed")] | length) == 0
+    ' <<<"$state_output" >/dev/null ||
+      die "$root_name state lacks a lineage but is not an empty new state"
+    printf 'Verified that %s uses a new, empty state object for environment %s.\n' \
+      "$root_name" "$environment"
+    printf 'Initialized %s with backend type %s and external config %s\n' \
+      "$root_name" "$backend_type" "$backend_config"
+    exit 0
+  fi
   if [[ "$allow_new_state" == "true" ]]; then
     die "$root_name state already exists with lineage $actual_lineage; rerun only with retained --expected-lineage evidence"
   fi
