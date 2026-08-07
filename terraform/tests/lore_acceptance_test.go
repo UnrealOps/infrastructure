@@ -301,7 +301,7 @@ func testLoreDataPlane(t *testing.T, region, clusterName, hostname string, confi
 	}
 
 	runLore(t, config, source, "lock", "acquire", "Content/Characters/hero.bin")
-	query := runLore(t, config, clone, "lock", "query", "--path", "Content/Characters/hero.bin")
+	query := runLore(t, config, clone, "lock", "query", "--branch", "main", "--path", "Content/Characters/hero.bin")
 	require.Contains(t, query, "Content/Characters/hero.bin")
 	runLore(t, config, source, "lock", "release", "Content/Characters/hero.bin")
 

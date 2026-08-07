@@ -112,9 +112,14 @@ validate_addons_plan() {
       .variables.aws_region.value == $region and
       .variables.cluster_name.value == $environment and
       (($require_cluster_data | not) or
-        ([.planned_values.root_module.resources[]?
-          | select(.address == "data.aws_eks_cluster.this")
-          | .values.name] == [$environment]))
+        ((
+          [.planned_values.root_module.resources[]?
+            | select(.address == "data.aws_eks_cluster.this")
+            | .values.name] +
+          [.prior_state.values.root_module.resources[]?
+            | select(.address == "data.aws_eks_cluster.this")
+            | .values.name]
+        ) | unique) == [$environment])
     '
 }
 
@@ -126,7 +131,7 @@ validate_addons_plan() {
 )
 ```
 
-Confirm at least three available AZs and sufficient quota for three NAT gateways, four EIPs, one EKS cluster, the OpenVPN instance, two system-node instances plus replacement headroom, VPCs, KMS keys, and IAM resources. This release was acceptance-tested in `us-west-2`; validate all pinned EKS, AMI, add-on, and Karpenter versions before using another region. Repository releases own those private source constants.
+Confirm at least three available AZs and sufficient quota for three NAT gateways, four EIPs, one EKS cluster, the OpenVPN instance, the configured system-node maximum plus replacement headroom, VPCs, KMS keys, and IAM resources. The system-node default is two `m6i.large` instances with `min = 2`, `desired = 2`, and `max = 3`, allowing default controller replicas to remain separated. This release was acceptance-tested in `us-west-2`; validate all pinned EKS, AMI, add-on, and Karpenter versions before using another region. Repository releases own those private source constants.
 
 Before planning, obtain these choices rather than inventing them: environment name, VPC CIDR, VPN ingress CIDRs, administrator ARNs, runtime secret ARN or plan-only placeholder, deletion protection, tags, and both state backends. Inspect any existing state and confirm its lineage and environment with the operator.
 
@@ -560,6 +565,23 @@ Verify the EKS version, active state, private-only endpoint, system-node AMI rel
   SYSTEM_AMI_RELEASE="$("$ENGINE" \
     -chdir=terraform/examples/complete/foundation \
     output -raw system_node_ami_release_version)"
+  EXPECTED_SYSTEM_NODE_GROUP_SIZE="$("$ENGINE" \
+    -chdir=terraform/examples/complete/foundation \
+    output -json system_node_group_size)"
+  SYSTEM_NODE_GROUP_NAME="$("$ENGINE" \
+    -chdir=terraform/examples/complete/foundation \
+    output -raw system_node_group_name)"
+  EXPECTED_SYSTEM_NODE_INSTANCE_TYPES="$("$ENGINE" \
+    -chdir=terraform/examples/complete/foundation \
+    output -json system_node_instance_types)"
+
+  LORE_ENABLED="$("$ENGINE" \
+    -chdir=terraform/examples/complete/foundation \
+    output -json lore_ecr_repository_url | jq -r 'type == "string"')"
+  if [[ "$LORE_ENABLED" != "true" ]]; then
+    EXPECTED_ADDONS="$(jq 'del(.cloudwatch_observability)' \
+      <<<"$EXPECTED_ADDONS")"
+  fi
 
   CLUSTER_JSON="$(aws eks describe-cluster \
     --region "$AWS_REGION" \
@@ -575,20 +597,32 @@ Verify the EKS version, active state, private-only endpoint, system-node AMI rel
   NODEGROUP_JSON="$(aws eks describe-nodegroup \
     --region "$AWS_REGION" \
     --cluster-name "$CLUSTER_NAME" \
-    --nodegroup-name "$CLUSTER_NAME-system" \
+    --nodegroup-name "$SYSTEM_NODE_GROUP_NAME" \
     --output json)"
-  jq -e --arg release "$SYSTEM_AMI_RELEASE" '
-    .nodegroup.status == "ACTIVE" and .nodegroup.releaseVersion == $release
+  jq -e --arg release "$SYSTEM_AMI_RELEASE" \
+    --argjson size "$EXPECTED_SYSTEM_NODE_GROUP_SIZE" \
+    --argjson instance_types "$EXPECTED_SYSTEM_NODE_INSTANCE_TYPES" '
+    .nodegroup.status == "ACTIVE" and
+    .nodegroup.releaseVersion == $release and
+    .nodegroup.instanceTypes == $instance_types and
+    .nodegroup.scalingConfig.minSize == $size.min and
+    .nodegroup.scalingConfig.desiredSize == $size.desired and
+    .nodegroup.scalingConfig.maxSize == $size.max
   ' <<<"$NODEGROUP_JSON"
 
-  test "$(jq 'length' <<<"$EXPECTED_ADDONS")" -eq 5
+  if [[ "$LORE_ENABLED" == "true" ]]; then
+    test "$(jq 'length' <<<"$EXPECTED_ADDONS")" -eq 6
+  else
+    test "$(jq 'length' <<<"$EXPECTED_ADDONS")" -eq 5
+  fi
   ADDONS_TSV="$(jq -er '
     {
       vpc_cni: "vpc-cni",
       coredns: "coredns",
       kube_proxy: "kube-proxy",
       ebs_csi_driver: "aws-ebs-csi-driver",
-      pod_identity_agent: "eks-pod-identity-agent"
+      pod_identity_agent: "eks-pod-identity-agent",
+      cloudwatch_observability: "amazon-cloudwatch-observability"
     } as $names
     | to_entries[]
     | .key as $key
@@ -610,8 +644,11 @@ Verify the EKS version, active state, private-only endpoint, system-node AMI rel
     --for=condition=Ready nodes \
     -l unrealops.io/node-role=system \
     --timeout=10m
-  test "$(kubectl --kubeconfig "$KUBECONFIG" get nodes \
-    -l unrealops.io/node-role=system -o json | jq '.items | length')" -ge 2
+  SYSTEM_NODE_COUNT="$(kubectl --kubeconfig "$KUBECONFIG" get nodes \
+    -l unrealops.io/node-role=system -o json | jq '.items | length')"
+  EXPECTED_SYSTEM_NODE_COUNT="$(jq -er '.desired' \
+    <<<"$EXPECTED_SYSTEM_NODE_GROUP_SIZE")"
+  test "$SYSTEM_NODE_COUNT" -ge "$EXPECTED_SYSTEM_NODE_COUNT"
 )
 ```
 

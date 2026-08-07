@@ -124,7 +124,7 @@ func TestLoreWorkloadSecurityAndTopologyContracts(t *testing.T) {
 		"edge.yaml": {
 			"ephemeral-storage: 750Gi",
 			"maxUnavailable: 1",
-			"minAvailable: 2",
+			"minAvailable: {{ max 0 (sub (.Values.edge.replicas | int) 1) }}",
 			"requiredDuringSchedulingIgnoredDuringExecution",
 			"topology.kubernetes.io/zone",
 		},
@@ -135,7 +135,7 @@ func TestLoreWorkloadSecurityAndTopologyContracts(t *testing.T) {
 		},
 		"write.yaml": {
 			"ephemeral-storage: 30Gi",
-			"minAvailable: 1",
+			"minAvailable: {{ max 0 (sub (.Values.write.replicas | int) 1) }}",
 			"karpenter.sh/capacity-type: on-demand",
 		},
 		"services.yaml": {
@@ -216,12 +216,19 @@ func TestLoreConfigChangesTriggerWorkloadRollouts(t *testing.T) {
 	for _, workload := range []string{"edge.yaml", "write.yaml"} {
 		assertFileContains(t, filepath.Join(chart, workload), `checksum/config: {{ include (print $.Template.BasePath "/configmaps.yaml") . | sha256sum }}`)
 	}
+	assertFileContains(t, filepath.Join(root, "terraform/modules/lore-workload/main.tf"), `lore_chart_version  = "0.1.4"`)
+	assertFileContains(t, filepath.Join(root, "terraform/modules/lore-workload/charts/lore/Chart.yaml"), `version: 0.1.4`)
 }
 
 func TestLoreCertificateAlarmsMatchEMFDimensions(t *testing.T) {
 	root := repositoryRoot(t)
 	workload := filepath.Join(root, "terraform/modules/lore-workload/main.tf")
 	assertFileContains(t, workload, `OTelLib = "unrealops.lore.certificates"`)
+	for _, tier := range []string{"edge.yaml", "write.yaml"} {
+		template := filepath.Join(root, "terraform/modules/lore-workload/charts/lore/templates", tier)
+		assertFileContains(t, template, `certificate telemetry endpoint unavailable; retrying in 30 seconds`)
+		assertFileContains(t, template, `sleep 30`)
+	}
 }
 
 func TestLoreImageSupplyChainIsPinned(t *testing.T) {
@@ -296,6 +303,46 @@ func TestLoreAddonsRejectMutableImageReferences(t *testing.T) {
 	main := filepath.Join(root, "terraform/examples/complete/addons/main.tf")
 	assertFileContains(t, variables, `@sha256:[0-9a-f]{64}`)
 	assertFileContains(t, main, `!var.enable_lore || var.lore_image != null`)
+}
+
+func TestCostOptimizedCapacityDefaultsRemainConfigurable(t *testing.T) {
+	root := repositoryRoot(t)
+	foundationVariables := filepath.Join(root, "terraform/examples/complete/foundation/variables.tf")
+	foundationMain := filepath.Join(root, "terraform/examples/complete/foundation/main.tf")
+	eksVariables := filepath.Join(root, "terraform/modules/eks/variables.tf")
+	addonsVariables := filepath.Join(root, "terraform/examples/complete/addons/variables.tf")
+	workloadVariables := filepath.Join(root, "terraform/modules/lore-workload/variables.tf")
+	acceptance := filepath.Join(root, "terraform/tests/complete_test.go")
+
+	for _, path := range []string{foundationVariables, eksVariables} {
+		for _, expected := range []string{
+			`variable "system_node_instance_types"`,
+			`default     = ["m6i.large"]`,
+			`variable "system_node_group_size"`,
+			"min     = 2",
+			"desired = 2",
+			"max     = 3",
+			"min <= desired <= max",
+		} {
+			assertFileContains(t, path, expected)
+		}
+	}
+	assertFileContains(t, foundationMain, "system_node_instance_types               = var.system_node_instance_types")
+	assertFileContains(t, foundationMain, "system_node_group_size                   = var.system_node_group_size")
+
+	for _, path := range []string{addonsVariables, workloadVariables} {
+		assertFileContains(t, path, "default     = 1")
+		assertFileContains(t, path, "must be a whole number of at least one")
+	}
+
+	for _, expected := range []string{
+		`foundationVariables["system_node_instance_types"] = []string{"m6i.large"}`,
+		`foundationVariables["system_node_group_size"]`,
+		`addonsVariables["lore_edge_replicas"] = 3`,
+		`addonsVariables["lore_write_replicas"] = 2`,
+	} {
+		assertFileContains(t, acceptance, expected)
+	}
 }
 
 func TestLoreSecretsProviderRunsOnTaintedEdgeNodes(t *testing.T) {

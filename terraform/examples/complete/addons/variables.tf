@@ -37,15 +37,25 @@ variable "lore_runtime_secret_name" {
 }
 
 variable "lore_edge_replicas" {
-  description = "Number of dedicated NVMe-backed Lore edge replicas."
+  description = "Desired number of dedicated NVMe-backed Lore edge replicas."
   type        = number
-  default     = 3
+  default     = 1
+
+  validation {
+    condition     = var.lore_edge_replicas >= 1 && var.lore_edge_replicas == floor(var.lore_edge_replicas)
+    error_message = "lore_edge_replicas must be a whole number of at least one."
+  }
 }
 
 variable "lore_write_replicas" {
-  description = "Number of durable Lore write replicas."
+  description = "Desired number of durable Lore write replicas."
   type        = number
-  default     = 2
+  default     = 1
+
+  validation {
+    condition     = var.lore_write_replicas >= 1 && var.lore_write_replicas == floor(var.lore_write_replicas)
+    error_message = "lore_write_replicas must be a whole number of at least one."
+  }
 }
 
 variable "lore_edge_instance_types" {

@@ -142,8 +142,12 @@ spec:
                 days="$(( (expiry_epoch - now_epoch) / 86400 ))"
                 timestamp="$(date +%s)000000000"
                 payload="$(printf '{"resourceMetrics":[{"resource":{"attributes":[{"key":"cluster","value":{"stringValue":"%s"}}]},"scopeMetrics":[{"scope":{"name":"unrealops.lore.certificates"},"metrics":[{"name":"lore_certificate_days_until_expiry","gauge":{"dataPoints":[{"attributes":[{"key":"cluster","value":{"stringValue":"%s"}},{"key":"tier","value":{"stringValue":"edge"}}],"timeUnixNano":"%s","asDouble":%s}]}}]}]}]}' {{ .Values.clusterName | quote }} {{ .Values.clusterName | quote }} "${timestamp}" "${days}")"
-                curl --fail --silent --show-error -H 'Content-Type: application/json' -d "${payload}" http://lore-otel.lore.svc.cluster.local:4318/v1/metrics
-                sleep 3600
+                if curl --fail --silent --show-error -H 'Content-Type: application/json' -d "${payload}" http://lore-otel.lore.svc.cluster.local:4318/v1/metrics; then
+                  sleep 3600
+                else
+                  echo "certificate telemetry endpoint unavailable; retrying in 30 seconds" >&2
+                  sleep 30
+                fi
               done
           resources:
             requests:
@@ -186,7 +190,7 @@ metadata:
     {{- include "lore.labels" . | nindent 4 }}
     app.kubernetes.io/component: edge
 spec:
-  minAvailable: 2
+  minAvailable: {{ max 0 (sub (.Values.edge.replicas | int) 1) }}
   selector:
     matchLabels:
       app.kubernetes.io/name: lore

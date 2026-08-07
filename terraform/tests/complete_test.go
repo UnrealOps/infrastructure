@@ -49,6 +49,10 @@ func TestCompleteStack(t *testing.T) {
 	}
 	if lore != nil {
 		foundationVariables["enable_lore"] = true
+		foundationVariables["system_node_instance_types"] = []string{"m6i.large"}
+		foundationVariables["system_node_group_size"] = map[string]interface{}{
+			"min": 2, "desired": 2, "max": 3,
+		}
 		foundationVariables["lore_runtime_secret_name"] = lore.runtimeSecretName
 		foundationVariables["lore_deletion_protection"] = false
 		foundationVariables["lore_force_destroy"] = true
@@ -116,6 +120,8 @@ func TestCompleteStack(t *testing.T) {
 		addonsVariables["enable_lore"] = true
 		addonsVariables["lore_image"] = lore.image
 		addonsVariables["lore_runtime_secret_name"] = lore.runtimeSecretName
+		addonsVariables["lore_edge_replicas"] = 3
+		addonsVariables["lore_write_replicas"] = 2
 	}
 	addons := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
 		TerraformDir:    addonsDir,

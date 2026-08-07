@@ -5,6 +5,11 @@ cluster_name = "studio-dev" # must match foundation name
 enable_lore = false
 # lore_image = "123456789012.dkr.ecr.us-west-2.amazonaws.com/studio-dev/lore-server@sha256:<64-lowercase-hex-characters>"
 
+# Cost-optimized defaults are one node per Lore tier. Set these to 3 and 2,
+# respectively, for the balanced multi-AZ deployment profile.
+lore_edge_replicas  = 1
+lore_write_replicas = 1
+
 tags = {
   Owner      = "platform-team"
   CostCenter = "game-studio"

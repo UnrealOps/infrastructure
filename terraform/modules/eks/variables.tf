@@ -74,8 +74,15 @@ variable "system_node_group_size" {
   }
 
   validation {
-    condition     = var.system_node_group_size.min >= 2 && var.system_node_group_size.min <= var.system_node_group_size.desired && var.system_node_group_size.desired <= var.system_node_group_size.max
-    error_message = "system_node_group_size must keep at least two nodes and satisfy min <= desired <= max."
+    condition = (
+      var.system_node_group_size.min >= 2 &&
+      var.system_node_group_size.min <= var.system_node_group_size.desired &&
+      var.system_node_group_size.desired <= var.system_node_group_size.max &&
+      alltrue([
+        for size in values(var.system_node_group_size) : size == floor(size)
+      ])
+    )
+    error_message = "system_node_group_size values must be whole numbers, keep at least two nodes, and satisfy min <= desired <= max."
   }
 }
 

@@ -50,6 +50,8 @@ module "eks" {
   vpc_id                                   = module.network.vpc_id
   private_subnet_ids                       = module.network.private_subnet_ids
   vpn_cidr_blocks                          = module.network.vpn_subnet_cidrs
+  system_node_instance_types               = var.system_node_instance_types
+  system_node_group_size                   = var.system_node_group_size
   access_entries                           = local.admin_access_entries
   enable_cluster_creator_admin_permissions = var.enable_cluster_creator_admin_permissions
   deletion_protection                      = var.deletion_protection

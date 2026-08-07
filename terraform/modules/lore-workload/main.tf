@@ -60,7 +60,7 @@ locals {
   nlb_name            = substr("${var.cluster_name}-lore", 0, 32)
   endpoint_hostname   = "lore.${var.cluster_name}.internal"
   alarm_actions       = var.alarm_topic_arn == null ? [] : [var.alarm_topic_arn]
-  lore_chart_version  = "0.1.3"
+  lore_chart_version  = "0.1.4"
 
   common_tags = merge(var.tags, {
     ManagedBy             = "Terraform"

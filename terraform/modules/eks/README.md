@@ -3,8 +3,10 @@
 Creates the opinionated EKS control plane and stable system capacity for a
 studio. The module pins Kubernetes `1.36`, uses a private-only API endpoint,
 enables all control-plane logs, KMS secret encryption, and VPC CNI network
-policy enforcement, and creates a two-node AL2023 on-demand managed node group.
-Karpenter-managed workload capacity is installed separately.
+policy enforcement, and creates an AL2023 on-demand managed node group. The
+default is two `m6i.large` nodes across Availability Zones so the
+repository's two-replica controllers can remain separated. Karpenter-managed
+workload capacity is installed separately.
 
 ## Usage
 
@@ -18,6 +20,12 @@ module "eks" {
 
   # OpenVPN SNAT makes traffic originate from its appliance subnets.
   vpn_cidr_blocks = module.network.vpn_subnet_cidrs
+
+  system_node_group_size = {
+    min     = 2
+    desired = 2
+    max     = 3
+  }
 
   access_entries = {
     platform_admins = {
@@ -41,6 +49,11 @@ module "eks" {
 ```
 
 Run Terraform/OpenTofu from a host connected to OpenVPN before configuring Kubernetes or Helm providers. The public EKS endpoint cannot be enabled through this module.
+
+The two-node default provides system add-on availability during failures and
+maintenance. Increase `system_node_group_size` for larger control-plane add-on
+loads, or select other validated on-demand instance types through
+`system_node_instance_types`.
 
 ## Compatibility Policy
 
