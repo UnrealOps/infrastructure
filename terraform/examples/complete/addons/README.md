@@ -41,6 +41,13 @@ make lore-ca CLUSTER_NAME=studio-dev LORE_CA_OUTPUT=studio-dev-lore-ca.crt
 tofu -chdir=terraform/examples/complete/addons output -raw lore_endpoint
 ```
 
+The cost-optimized defaults deploy one edge replica and one write replica,
+which results in one Karpenter node for each Lore tier. Set
+`lore_edge_replicas = 3` and `lore_write_replicas = 2` for the balanced
+multi-AZ profile. These replica inputs are the desired node demand; Karpenter
+creates and removes the corresponding nodes rather than maintaining a separate
+fixed Auto Scaling Group minimum.
+
 Certificate rotation uploads a new Secrets Manager version but Lore reads
 certificates only at startup. Run `make lore-pki-rotate`, then restart the write
 tier one pod at a time before restarting the edge tier.

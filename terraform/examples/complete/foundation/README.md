@@ -1,11 +1,21 @@
 # Complete foundation
 
 This root creates the network, single-instance OpenVPN gateway, private EKS
-1.36 cluster, stable system node group, and Karpenter AWS prerequisites. Lore
+1.36 cluster, two-node `m6i.large` system group, and Karpenter AWS
+prerequisites. Lore
 is an opt-in extension that adds durable S3/DynamoDB storage, private ECR,
 private DNS, Pod Identity roles, controller IAM, and CloudWatch
 observability. It intentionally does not install Helm charts because its EKS
 endpoint has no public access.
+
+`system_node_group_size` exposes the managed node group's `min`, `desired`, and
+`max` values. The default is `2/2/3` on `m6i.large`, allowing default
+two-replica controllers to run on separate system nodes. Increase those values
+or select other validated on-demand instance types as the add-on load grows.
+
+OpenVPN remains a singleton because its Auto Scaling Group owns one stable EIP
+and endpoint; it is not a horizontally scalable tier. Lore desired capacity is
+configured separately in the add-ons root and fulfilled by Karpenter.
 
 Run commands from the repository root:
 

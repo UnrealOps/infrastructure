@@ -39,8 +39,9 @@ workloads.
   without AWS Client VPN hourly connection charges.
 - **Elastic workload capacity** — Karpenter provisions Spot or On-Demand nodes
   and consolidates unused capacity.
-- **Stable system capacity** — a default two-node, On-Demand AL2023 managed
-  node group keeps core controllers available.
+- **Configurable system capacity** — a two-node, On-Demand AL2023 managed node
+  group supports controller availability and can be scaled through explicit
+  minimum, desired, and maximum settings.
 - **Secure foundations** — EKS secrets encryption, control-plane logs, VPC flow
   logs, IMDSv2, encrypted volumes, and SSM administration are enabled.
 - **Reusable and testable** — small modules support both Terraform and OpenTofu,

@@ -10,8 +10,8 @@ content path.
 ```mermaid
 flowchart LR
     Client["Lore client on OpenVPN"] -->|"TLS gRPC or QUIC :41337"| NLB["Internal NLB"]
-    NLB --> Edge["3 Arm64 edge replicas\none dedicated NVMe node per AZ"]
-    Edge -->|"mTLS QUIC :41340"| Write["2 durable write replicas"]
+    NLB --> Edge["1 Arm64 edge replica by default\none dedicated NVMe node per replica"]
+    Edge -->|"mTLS QUIC :41340"| Write["1 durable write replica by default"]
     Edge -->|"TLS gRPC :41337"| Write
     Edge --> Locks["DynamoDB locks"]
     Write --> S3["S3 fragments\nSSE-KMS + versioning"]
@@ -126,10 +126,13 @@ retains state, PKI, and secrets whenever cleanup cannot be proven.
 
 ## Cost and rollback
 
-The balanced default creates three `c8gd.4xlarge` edge nodes plus write
-capacity, S3, four on-demand DynamoDB tables, CloudWatch ingestion, X-Ray
-traces, and an internal NLB. Existing deployments pay none of these Lore costs
-while `enable_lore = false`.
+The cost-optimized default creates one `c8gd.4xlarge` edge node and one
+general-purpose write node, in addition to the foundation's two system nodes
+and OpenVPN instance. It provides no Lore replica-level high availability. Set
+`lore_edge_replicas = 3` and `lore_write_replicas = 2` for the balanced Lore
+multi-AZ profile. S3, four on-demand DynamoDB tables, CloudWatch ingestion,
+X-Ray traces, and an internal NLB remain part of either Lore profile. Existing
+deployments pay none of these Lore costs while `enable_lore = false`.
 
 Rollback the workload by reapplying add-ons with a previously signed immutable
 digest. Storage remains forward-compatible because a rollback does not replace

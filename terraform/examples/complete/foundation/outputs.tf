@@ -73,6 +73,21 @@ output "system_node_ami_release_version" {
   value       = module.eks.system_node_ami_release_version
 }
 
+output "system_node_group_size" {
+  description = "Configured minimum, desired, and maximum system node counts."
+  value       = var.system_node_group_size
+}
+
+output "system_node_group_name" {
+  description = "AWS-generated name of the system managed node group."
+  value       = split(":", module.eks.system_node_group.node_group_id)[1]
+}
+
+output "system_node_instance_types" {
+  description = "Configured instance types for the system node group."
+  value       = var.system_node_instance_types
+}
+
 output "cluster_kms_key_arn" {
   description = "KMS key ARN used for EKS secrets encryption and cleanup verification."
   value       = module.eks.kms_key_arn

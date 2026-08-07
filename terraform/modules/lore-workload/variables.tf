@@ -35,24 +35,24 @@ variable "runtime_secret_name" {
 }
 
 variable "edge_replicas" {
-  description = "Number of NVMe-backed Lore edge replicas."
+  description = "Desired number of NVMe-backed Lore edge replicas; each replica requires a dedicated Karpenter node."
   type        = number
-  default     = 3
+  default     = 1
 
   validation {
-    condition     = var.edge_replicas >= 3
-    error_message = "edge_replicas must be at least three."
+    condition     = var.edge_replicas >= 1 && var.edge_replicas == floor(var.edge_replicas)
+    error_message = "edge_replicas must be a whole number of at least one."
   }
 }
 
 variable "write_replicas" {
-  description = "Number of durable Lore write replicas."
+  description = "Desired number of durable Lore write replicas; required pod anti-affinity causes Karpenter to place each replica on a different node."
   type        = number
-  default     = 2
+  default     = 1
 
   validation {
-    condition     = var.write_replicas >= 2
-    error_message = "write_replicas must be at least two."
+    condition     = var.write_replicas >= 1 && var.write_replicas == floor(var.write_replicas)
+    error_message = "write_replicas must be a whole number of at least one."
   }
 }
 
