@@ -15,7 +15,7 @@ ADD --checksum=sha256:02a0e47c672748136b2467efe65961685f5cfb7a341dae0115e0564e3a
 
 FROM release-${TARGETARCH} AS release-archive
 
-FROM --platform=${BUILDPLATFORM} ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea AS release
+FROM --platform=${BUILDPLATFORM} ubuntu:26.04@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03 AS release
 
 COPY --from=release-archive /loreserver.tar.gz /tmp/loreserver.tar.gz
 
@@ -25,7 +25,7 @@ RUN mkdir -p /tmp/release /out/licenses \
     && install --mode 0444 /tmp/release/LICENSE.txt /out/licenses/LICENSE.txt \
     && install --mode 0444 /tmp/release/THIRD-PARTY-NOTICES.txt /out/licenses/THIRD-PARTY-NOTICES.txt
 
-FROM ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
+FROM ubuntu:26.04@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
 
 ARG LORE_VERSION=0.8.5
 ARG LORE_REVISION=2d86d1dda98bfc1575ac7a20a6ff8c7fbc760383
