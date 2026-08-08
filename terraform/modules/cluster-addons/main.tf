@@ -47,6 +47,22 @@ locals {
   )
 }
 
+resource "terraform_data" "lore_dependencies_validation" {
+  input = var.enable_lore_dependencies
+
+  lifecycle {
+    precondition {
+      condition     = !var.enable_lore_dependencies || (var.aws_region != null && length(var.aws_region) > 0)
+      error_message = "aws_region is required when enable_lore_dependencies is true."
+    }
+
+    precondition {
+      condition     = !var.enable_lore_dependencies || (var.vpc_id != null && length(var.vpc_id) > 0)
+      error_message = "vpc_id is required when enable_lore_dependencies is true."
+    }
+  }
+}
+
 resource "helm_release" "karpenter_crds" {
   name             = "karpenter-crd"
   namespace        = var.namespace
@@ -129,4 +145,108 @@ resource "helm_release" "karpenter_resources" {
   })]
 
   depends_on = [helm_release.karpenter]
+}
+
+resource "helm_release" "aws_load_balancer_controller" {
+  count = var.enable_lore_dependencies ? 1 : 0
+
+  name       = "aws-load-balancer-controller"
+  namespace  = "kube-system"
+  repository = "https://aws.github.io/eks-charts"
+  chart      = "aws-load-balancer-controller"
+  version    = var.aws_load_balancer_controller_version
+
+  atomic          = true
+  cleanup_on_fail = true
+  max_history     = 5
+  timeout         = var.helm_timeout_seconds
+  wait            = true
+
+  values = [yamlencode({
+    clusterName  = var.cluster_name
+    region       = var.aws_region
+    vpcId        = var.vpc_id
+    replicaCount = 2
+    serviceAccount = {
+      create = true
+      name   = "aws-load-balancer-controller"
+    }
+    podDisruptionBudget = {
+      maxUnavailable = 1
+    }
+    enableServiceMutatorWebhook = true
+  })]
+
+  depends_on = [
+    helm_release.karpenter,
+    terraform_data.lore_dependencies_validation,
+  ]
+}
+
+resource "helm_release" "secrets_store_csi_driver" {
+  count = var.enable_lore_dependencies ? 1 : 0
+
+  name       = "secrets-store-csi-driver"
+  namespace  = "kube-system"
+  repository = "https://kubernetes-sigs.github.io/secrets-store-csi-driver/charts"
+  chart      = "secrets-store-csi-driver"
+  version    = var.secrets_store_csi_driver_version
+
+  atomic          = true
+  cleanup_on_fail = true
+  max_history     = 5
+  timeout         = var.helm_timeout_seconds
+  wait            = true
+
+  values = [yamlencode({
+    tokenRequests = [
+      { audience = "sts.amazonaws.com" },
+      { audience = "pods.eks.amazonaws.com" },
+    ]
+    syncSecret = {
+      enabled = false
+    }
+    enableSecretRotation = false
+  })]
+
+  depends_on = [
+    helm_release.karpenter,
+    terraform_data.lore_dependencies_validation,
+  ]
+}
+
+resource "helm_release" "secrets_store_csi_provider_aws" {
+  count = var.enable_lore_dependencies ? 1 : 0
+
+  name       = "secrets-store-csi-driver-provider-aws"
+  namespace  = "kube-system"
+  repository = "https://aws.github.io/secrets-store-csi-driver-provider-aws"
+  chart      = "secrets-store-csi-driver-provider-aws"
+  version    = var.secrets_store_csi_provider_aws_version
+
+  atomic          = true
+  cleanup_on_fail = true
+  max_history     = 5
+  timeout         = var.helm_timeout_seconds
+  wait            = true
+
+  values = [yamlencode({
+    awsRegion = var.aws_region
+    tolerations = [
+      {
+        key      = "unrealops.io/lore-edge"
+        operator = "Equal"
+        value    = "true"
+        effect   = "NoSchedule"
+      },
+    ]
+    secrets-store-csi-driver = {
+      install = false
+    }
+  })]
+
+  depends_on = [
+    helm_release.secrets_store_csi_driver,
+    terraform_data.lore_dependencies_validation,
+  ]
 }

@@ -1,0 +1,253 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lore-edge-config
+  namespace: lore
+  labels:
+    {{- include "lore.labels" . | nindent 4 }}
+    app.kubernetes.io/component: edge
+data:
+  local.toml: |
+    [server.quic]
+    enabled = true
+    verify_client_certs = false
+
+    [server.quic.certificate]
+    cert_file = "/etc/lore/certs/edge.crt"
+    pkey_file = "/etc/lore/certs/edge.key"
+
+    [server.grpc]
+    enabled = true
+    verify_client_certs = false
+
+    [server.grpc.certificate]
+    cert_file = "/etc/lore/certs/edge.crt"
+    pkey_file = "/etc/lore/certs/edge.key"
+
+    [server.quic_internal]
+    enabled = false
+
+    [server.grpc_internal]
+    enabled = false
+
+    [server.http]
+    enabled = true
+    store_health_check = true
+
+    [immutable_store]
+    mode = "composite"
+
+    [immutable_store.composite.local]
+    mode = "local"
+
+    [immutable_store.composite.local.local]
+    path = "/var/lib/lore/immutable"
+    flush_delay_seconds = 10
+    max_size = {{ .Values.storage.edgeCacheMaxSizeBytes }}
+    target_size_percentage = 90
+
+    [immutable_store.composite.durable]
+    mode = "replicated"
+    replication_mode = "read_write"
+
+    [immutable_store.composite.durable.replicated]
+    remote_url = "quics://lore-write.lore.svc.cluster.local:41340"
+    periodic_client_refresh_secs = 30
+    client_metrics_interval_seconds = 30
+    client_max_reconnects = 10
+
+    [immutable_store.composite.durable.replicated.certs]
+    cert_file = "/etc/lore/certs/edge-client.crt"
+    pkey_file = "/etc/lore/certs/edge-client.key"
+    cert_chain = "/etc/lore/certs/ca.crt"
+
+    [immutable_store.composite.durable.replicated.regenerate_retry]
+    initial_backoff_ms = 100
+    max_backoff_ms = 5000
+    max_attempts = 10
+    jitter = 0.2
+
+    [mutable_store]
+    mode = "aws"
+
+    [plugins.aws.mutable_store]
+    dynamodb_table = {{ .Values.storage.mutableStoreTable | quote }}
+    dynamodb_region = {{ .Values.aws.region | quote }}
+    timeout_millis = 5000
+
+    [lock_store]
+    mode = "aws"
+
+    [plugins.aws.lock_store]
+    dynamodb_table = {{ .Values.storage.locksTable | quote }}
+    dynamodb_region = {{ .Values.aws.region | quote }}
+    timeout_millis = 5000
+
+    [telemetry]
+    additional_labels = { cluster = {{ .Values.clusterName | quote }}, tier = "edge" }
+
+    [telemetry.exporter]
+    endpoint = "http://lore-otel.lore.svc.cluster.local:4317"
+    queue_size = 8192
+    timeout = 5000
+
+    [telemetry.logger]
+    enable_otlp = false
+    format = "json"
+    output = "stdout"
+
+    [telemetry.traces]
+    sample_rate = 0.05
+    sample_rate_low_tier = 0.001
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lore-write-config
+  namespace: lore
+  labels:
+    {{- include "lore.labels" . | nindent 4 }}
+    app.kubernetes.io/component: write
+data:
+  local.toml: |
+    [server.quic]
+    enabled = false
+
+    [server.grpc]
+    enabled = true
+    verify_client_certs = false
+
+    [server.grpc.certificate]
+    cert_file = "/etc/lore/certs/write.crt"
+    pkey_file = "/etc/lore/certs/write.key"
+
+    [server.quic_internal]
+    enabled = true
+    verify_client_certs = true
+
+    [server.quic_internal.certificate]
+    cert_file = "/etc/lore/certs/write.crt"
+    pkey_file = "/etc/lore/certs/write.key"
+    cert_chain = "/etc/lore/certs/ca.crt"
+
+    [server.grpc_internal]
+    enabled = false
+
+    [server.http]
+    enabled = true
+    store_health_check = true
+
+    [immutable_store]
+    mode = "composite"
+
+    [immutable_store.composite.local]
+    mode = "local"
+
+    [immutable_store.composite.local.local]
+    path = "/var/lib/lore/immutable"
+    flush_delay_seconds = 10
+    max_size = {{ .Values.storage.writeCacheMaxSizeBytes }}
+    target_size_percentage = 90
+
+    [immutable_store.composite.durable]
+    mode = "aws"
+
+    [mutable_store]
+    mode = "aws"
+
+    [lock_store]
+    mode = "aws"
+
+    [plugins.aws.immutable_store]
+    s3_bucket = {{ .Values.storage.bucketName | quote }}
+    s3_region = {{ .Values.aws.region | quote }}
+    dynamodb_fragments_table = {{ .Values.storage.fragmentsTable | quote }}
+    dynamodb_metadata_table = {{ .Values.storage.fragmentMetadataTable | quote }}
+    dynamodb_region = {{ .Values.aws.region | quote }}
+    timeout_millis = 30000
+
+    [plugins.aws.mutable_store]
+    dynamodb_table = {{ .Values.storage.mutableStoreTable | quote }}
+    dynamodb_region = {{ .Values.aws.region | quote }}
+    timeout_millis = 5000
+
+    [plugins.aws.lock_store]
+    dynamodb_table = {{ .Values.storage.locksTable | quote }}
+    dynamodb_region = {{ .Values.aws.region | quote }}
+    timeout_millis = 5000
+
+    [telemetry]
+    additional_labels = { cluster = {{ .Values.clusterName | quote }}, tier = "write" }
+
+    [telemetry.exporter]
+    endpoint = "http://lore-otel.lore.svc.cluster.local:4317"
+    queue_size = 8192
+    timeout = 5000
+
+    [telemetry.logger]
+    enable_otlp = false
+    format = "json"
+    output = "stdout"
+
+    [telemetry.traces]
+    sample_rate = 0.05
+    sample_rate_low_tier = 0.001
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lore-otel-config
+  namespace: lore
+  labels:
+    {{- include "lore.labels" . | nindent 4 }}
+    app.kubernetes.io/component: telemetry
+data:
+  config.yaml: |
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+    processors:
+      batch:
+        send_batch_size: 1024
+        timeout: 5s
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 768
+        spike_limit_mib: 192
+    exporters:
+      awsemf:
+        region: {{ .Values.aws.region }}
+        namespace: UnrealOps/Lore
+        log_group_name: /aws/lore/{{ .Values.clusterName }}/metrics
+        dimension_rollup_option: NoDimensionRollup
+        resource_to_telemetry_conversion:
+          enabled: true
+      awsxray:
+        region: {{ .Values.aws.region }}
+    service:
+      extensions:
+        - health_check
+      pipelines:
+        metrics:
+          receivers:
+            - otlp
+          processors:
+            - memory_limiter
+            - batch
+          exporters:
+            - awsemf
+        traces:
+          receivers:
+            - otlp
+          processors:
+            - memory_limiter
+            - batch
+          exporters:
+            - awsxray

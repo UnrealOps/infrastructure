@@ -60,7 +60,12 @@ output "system_node_group" {
 
 output "cluster_addons" {
   description = "Attributes of the managed EKS add-ons."
-  value       = module.eks.cluster_addons
+  value = merge(
+    module.eks.cluster_addons,
+    var.enable_lore_observability ? {
+      amazon-cloudwatch-observability = aws_eks_addon.cloudwatch_observability[0]
+    } : {},
+  )
 }
 
 output "cluster_addon_versions" {
@@ -76,4 +81,17 @@ output "system_node_ami_release_version" {
 output "ebs_csi_pod_identity_role_arn" {
   description = "Pod Identity IAM role used by the EBS CSI controller."
   value       = aws_iam_role.ebs_csi.arn
+}
+
+output "cloudwatch_observability_pod_identity_role_arn" {
+  description = "Pod Identity IAM role used by the optional CloudWatch Observability add-on."
+  value       = try(aws_iam_role.cloudwatch_observability[0].arn, null)
+}
+
+output "container_insights_log_group_names" {
+  description = "Terraform-managed Container Insights log groups, empty when Lore observability is disabled."
+  value = merge(
+    { for suffix, log_group in aws_cloudwatch_log_group.container_insights : suffix => log_group.name },
+    { for _, log_group in aws_cloudwatch_log_group.otel_container_insights_application : "otel_application" => log_group.name },
+  )
 }

@@ -22,6 +22,7 @@ import (
 
 func TestCompleteStack(t *testing.T) {
 	region := requireAcc(t)
+	lore := loadLoreAcceptanceConfig(t, region)
 	secretARN := requiredEnv(t, "TEST_COMPLETE_OPENVPN_RUNTIME_SECRET_ARN")
 	profile := requiredEnv(t, "TEST_COMPLETE_OPENVPN_PROFILE")
 	profileContents, err := os.ReadFile(profile)
@@ -41,28 +42,49 @@ func TestCompleteStack(t *testing.T) {
 	root := repositoryRoot(t)
 	name := testName("unrealops-e2e")
 	foundationDir := filepath.Join(root, "terraform/examples/complete/foundation")
+	foundationVariables := map[string]interface{}{
+		"aws_region":                 region,
+		"name":                       name,
+		"openvpn_runtime_secret_arn": secretARN,
+	}
+	if lore != nil {
+		foundationVariables["enable_lore"] = true
+		foundationVariables["system_node_instance_types"] = []string{"m6i.large"}
+		foundationVariables["system_node_group_size"] = map[string]interface{}{
+			"min": 2, "desired": 2, "max": 3,
+		}
+		foundationVariables["lore_runtime_secret_name"] = lore.runtimeSecretName
+		foundationVariables["lore_deletion_protection"] = false
+		foundationVariables["lore_force_destroy"] = true
+	}
 	foundation := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
 		TerraformDir:    foundationDir,
 		TerraformBinary: terraformBinary(),
 		NoColor:         true,
-		Vars: map[string]interface{}{
-			"aws_region":                 region,
-			"name":                       name,
-			"openvpn_runtime_secret_arn": secretARN,
-		},
+		Vars:            foundationVariables,
 	})
 	defer terraform.Destroy(t, foundation)
 	terraform.InitAndApply(t, foundation)
 	t.Logf("UNREALOPS_ACCEPTANCE_KMS_KEY_ARN=%s", terraform.Output(t, foundation, "cluster_kms_key_arn"))
+	if lore != nil {
+		t.Logf("UNREALOPS_ACCEPTANCE_LORE_KMS_KEY_ARN=%s", terraform.Output(t, foundation, "lore_kms_key_arn"))
+	}
 
 	expectedClusterVersion := terraform.Output(t, foundation, "cluster_version")
 	require.Regexp(t, `^[0-9]+\.[0-9]+$`, expectedClusterVersion)
 	expectedAMIRelease := terraform.Output(t, foundation, "system_node_ami_release_version")
 	require.Regexp(t, `^[0-9]+\.[0-9]+\.[0-9]+-[0-9]{8}$`, expectedAMIRelease)
 	expectedAddonVersions := terraform.OutputMap(t, foundation, "cluster_addon_versions")
-	require.Len(t, expectedAddonVersions, 5)
+	require.Len(t, expectedAddonVersions, 6)
 	for _, version := range expectedAddonVersions {
 		require.Regexp(t, `^v[0-9]+\.[0-9]+\.[0-9]+-eksbuild\.[0-9]+$`, version)
+	}
+	deployedAddonVersions := make(map[string]string, len(expectedAddonVersions))
+	for addon, version := range expectedAddonVersions {
+		deployedAddonVersions[addon] = version
+	}
+	if lore == nil {
+		delete(deployedAddonVersions, "cloudwatch_observability")
 	}
 	assertEKSFoundation(
 		t,
@@ -70,7 +92,7 @@ func TestCompleteStack(t *testing.T) {
 		terraform.Output(t, foundation, "cluster_name"),
 		expectedClusterVersion,
 		expectedAMIRelease,
-		expectedAddonVersions,
+		deployedAddonVersions,
 	)
 
 	clusterEndpoint := terraform.Output(t, foundation, "cluster_endpoint")
@@ -81,19 +103,31 @@ func TestCompleteStack(t *testing.T) {
 
 	privateAPIAddress := net.JoinHostPort(parsedEndpoint.Hostname(), "443")
 	assertTCPUnreachable(t, privateAPIAddress)
+	if lore != nil {
+		assertDNSUnreachable(t, terraform.Output(t, foundation, "lore_endpoint_hostname"))
+		assertLoreFoundation(t, region, name, foundation)
+	}
 	stopTunnel := startOpenVPNTunnel(t, profile, terraform.Output(t, foundation, "openvpn_endpoint"), 3*time.Minute)
 	defer stopTunnel()
 	waitForTCP(t, privateAPIAddress, 3*time.Minute)
 
 	addonsDir := filepath.Join(root, "terraform/examples/complete/addons")
+	addonsVariables := map[string]interface{}{
+		"aws_region":   region,
+		"cluster_name": name,
+	}
+	if lore != nil {
+		addonsVariables["enable_lore"] = true
+		addonsVariables["lore_image"] = lore.image
+		addonsVariables["lore_runtime_secret_name"] = lore.runtimeSecretName
+		addonsVariables["lore_edge_replicas"] = 3
+		addonsVariables["lore_write_replicas"] = 2
+	}
 	addons := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
 		TerraformDir:    addonsDir,
 		TerraformBinary: terraformBinary(),
 		NoColor:         true,
-		Vars: map[string]interface{}{
-			"aws_region":   region,
-			"cluster_name": name,
-		},
+		Vars:            addonsVariables,
 	})
 	defer terraform.Destroy(t, addons)
 	terraform.InitAndApply(t, addons)
@@ -102,6 +136,9 @@ func TestCompleteStack(t *testing.T) {
 	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
 	runCommand(t, nil, "aws", "eks", "update-kubeconfig", "--region", region, "--name", terraform.Output(t, foundation, "cluster_name"), "--kubeconfig", kubeconfig)
 	testKarpenterProvisioningAndConsolidation(t, kubeconfig)
+	if lore != nil {
+		testLoreAcceptance(t, region, name, kubeconfig, lore, foundation, addons)
+	}
 }
 
 func assertEKSFoundation(t *testing.T, region, clusterName, expectedClusterVersion, expectedAMIRelease string, expectedAddons map[string]string) {
@@ -119,20 +156,25 @@ func assertEKSFoundation(t *testing.T, region, clusterName, expectedClusterVersi
 	require.NotEmpty(t, clusterResult.Cluster.Logging.ClusterLogging)
 
 	addonNames := map[string]string{
-		"vpc_cni":            "vpc-cni",
-		"coredns":            "coredns",
-		"kube_proxy":         "kube-proxy",
-		"ebs_csi_driver":     "aws-ebs-csi-driver",
-		"pod_identity_agent": "eks-pod-identity-agent",
+		"vpc_cni":                  "vpc-cni",
+		"coredns":                  "coredns",
+		"kube_proxy":               "kube-proxy",
+		"ebs_csi_driver":           "aws-ebs-csi-driver",
+		"pod_identity_agent":       "eks-pod-identity-agent",
+		"cloudwatch_observability": "amazon-cloudwatch-observability",
 	}
 	for outputName, addonName := range addonNames {
+		expectedVersion, enabled := expectedAddons[outputName]
+		if !enabled {
+			continue
+		}
 		result, err := client.DescribeAddonWithContext(context.Background(), &eks.DescribeAddonInput{
 			AddonName:   aws.String(addonName),
 			ClusterName: aws.String(clusterName),
 		})
 		require.NoError(t, err)
 		require.Equal(t, eks.AddonStatusActive, aws.StringValue(result.Addon.Status))
-		require.Equal(t, expectedAddons[outputName], aws.StringValue(result.Addon.AddonVersion))
+		require.Equal(t, expectedVersion, aws.StringValue(result.Addon.AddonVersion))
 	}
 
 	nodegroups, err := client.ListNodegroupsWithContext(context.Background(), &eks.ListNodegroupsInput{ClusterName: aws.String(clusterName)})
@@ -216,6 +258,15 @@ func assertTCPUnreachable(t *testing.T, address string) {
 	}
 	_ = connection.Close()
 	t.Fatalf("%s was reachable before the acceptance OpenVPN tunnel started", address)
+}
+
+func assertDNSUnreachable(t *testing.T, hostname string) {
+	t.Helper()
+	addresses, err := net.LookupHost(hostname)
+	if err != nil {
+		return
+	}
+	t.Fatalf("%s unexpectedly resolved before the OpenVPN tunnel and private Lore alias existed: %v", hostname, addresses)
 }
 
 func testKarpenterProvisioningAndConsolidation(t *testing.T, kubeconfig string) {
