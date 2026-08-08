@@ -3,12 +3,29 @@ name       = "studio-dev"
 
 openvpn_runtime_secret_arn = "arn:aws:secretsmanager:us-west-2:123456789012:secret:unrealops/studio-dev/openvpn/runtime-example"
 
+# Stable system nodes for cluster controllers and managed add-ons.
+system_node_instance_types = ["m6i.large"]
+system_node_group_size = {
+  min     = 2
+  desired = 2
+  max     = 3
+}
+
 admin_principal_arns = [
   "arn:aws:iam::123456789012:role/StudioInfrastructureAdministrators",
 ]
 
 # Restrict this when employees connect from stable public networks.
 openvpn_ingress_cidrs = ["0.0.0.0/0"]
+
+# Lore is opt-in. Run `make lore-pki-init CLUSTER_NAME=studio-dev
+# AWS_REGION=us-west-2` before setting this to true.
+enable_lore = false
+
+# Keep protection enabled for durable environments. Only ephemeral acceptance
+# environments should set force destroy.
+lore_deletion_protection = true
+lore_force_destroy       = false
 
 tags = {
   Owner      = "platform-team"

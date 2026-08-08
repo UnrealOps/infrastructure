@@ -1,6 +1,11 @@
 # Network Module
 
-Creates the three-AZ VPC foundation for a private EKS cluster. Each AZ receives a `/19` private worker subnet and `/24` public NAT gateway subnet. Three separate `/28` public subnets host replaceable VPN appliances. The module also creates one NAT gateway per AZ, CloudWatch VPC flow logs, an S3 gateway endpoint, and EKS/Karpenter discovery tags.
+Creates the three-AZ VPC foundation for a private EKS cluster. Each AZ receives
+a `/19` private worker subnet and `/24` public NAT gateway subnet. Three
+separate `/28` public subnets host replaceable VPN appliances. The module also
+creates one NAT gateway per AZ, CloudWatch VPC flow logs, S3 and DynamoDB
+gateway endpoints on every private route table, and EKS/Karpenter discovery
+tags.
 
 ## Usage
 

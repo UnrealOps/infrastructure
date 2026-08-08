@@ -11,7 +11,10 @@ directories=(
 	terraform/modules/openvpn
 	terraform/modules/eks
 	terraform/modules/karpenter-infra
+	terraform/modules/cluster-addons-infra
 	terraform/modules/cluster-addons
+	terraform/modules/lore-infra
+	terraform/modules/lore-workload
 	terraform/examples/complete/foundation
 	terraform/examples/complete/addons
 )

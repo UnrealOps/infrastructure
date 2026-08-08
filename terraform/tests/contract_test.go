@@ -19,7 +19,10 @@ func TestSupportedModuleLayout(t *testing.T) {
 		"terraform/modules/openvpn",
 		"terraform/modules/eks",
 		"terraform/modules/karpenter-infra",
+		"terraform/modules/cluster-addons-infra",
 		"terraform/modules/cluster-addons",
+		"terraform/modules/lore-infra",
+		"terraform/modules/lore-workload",
 		"terraform/examples/complete/foundation",
 		"terraform/examples/complete/addons",
 	} {
@@ -30,6 +33,31 @@ func TestSupportedModuleLayout(t *testing.T) {
 		}
 		if !info.IsDir() {
 			t.Errorf("required path %s is not a directory", relativePath)
+		}
+	}
+}
+
+func TestLoreModulesDoNotConfigureProvidersOrBackends(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, relativePath := range []string{
+		"terraform/modules/cluster-addons-infra",
+		"terraform/modules/lore-infra",
+		"terraform/modules/lore-workload",
+	} {
+		matches, err := filepath.Glob(filepath.Join(root, relativePath, "*.tf"))
+		if err != nil {
+			t.Fatalf("glob %s: %v", relativePath, err)
+		}
+		for _, path := range matches {
+			contents, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read %s: %v", path, err)
+			}
+			for _, forbidden := range []string{`provider "`, `backend "`} {
+				if strings.Contains(string(contents), forbidden) {
+					t.Errorf("%s contains forbidden module configuration %q", path, forbidden)
+				}
+			}
 		}
 	}
 }
@@ -65,6 +93,21 @@ func TestSupportedEKSWiring(t *testing.T) {
 	upstreamEKS := findHCLBlock(t, wrapperBody, "module", "eks")
 	if source := hclAttributeString(t, upstreamEKS.Body.Attributes["source"], "upstream EKS module source"); source != "terraform-aws-modules/eks/aws" {
 		t.Errorf("upstream EKS module source is %q, want %q", source, "terraform-aws-modules/eks/aws")
+	}
+}
+
+func TestEKSSuppressesDuplicateClusterCreatorAccessEntry(t *testing.T) {
+	root := repositoryRoot(t)
+	eks := filepath.Join(root, "terraform/modules/eks/main.tf")
+
+	for _, expected := range []string{
+		`data "aws_iam_session_context" "current"`,
+		`caller_principal_arn     = data.aws_iam_session_context.current.issuer_arn`,
+		`entry.principal_arn == local.caller_principal_arn`,
+		`var.enable_cluster_creator_admin_permissions && !local.caller_has_access_entry`,
+		`enable_cluster_creator_admin_permissions = local.enable_cluster_creator_admin_permissions`,
+	} {
+		assertFileContains(t, eks, expected)
 	}
 }
 
@@ -119,6 +162,56 @@ func TestKarpenterManifestsDoNotSetControllerOwnedTags(t *testing.T) {
 				t.Errorf("%s configures Karpenter-owned tag %q", relativePath, key)
 			}
 		}
+	}
+}
+
+func TestBackendHelperAcceptsOnlyEmptyLineagelessState(t *testing.T) {
+	root := repositoryRoot(t)
+	helper := filepath.Join(root, ".agents/skills/deploy-unrealops-infrastructure/scripts/init-backend.sh")
+
+	for _, expected := range []string{
+		`[[ "$allow_new_state" == "true" ]]`,
+		`.serial == 0`,
+		`(.outputs | type == "object" and length == 0)`,
+		`[.resources[]? | select(.mode == "managed")] | length) == 0`,
+		`state lacks a lineage but is not an empty new state`,
+	} {
+		assertFileContains(t, helper, expected)
+	}
+}
+
+func TestBackendHelperAllowsOnlyLoreWorkloadAWSResourcesInAddonsState(t *testing.T) {
+	root := repositoryRoot(t)
+	helper := filepath.Join(root, ".agents/skills/deploy-unrealops-infrastructure/scripts/init-backend.sh")
+
+	for _, expected := range []string{
+		`startswith("module.lore_workload")`,
+		`"aws_cloudwatch_dashboard"`,
+		`"aws_cloudwatch_metric_alarm"`,
+		`"aws_route53_record"`,
+		`add-ons state contains AWS resources outside the Lore workload allowlist`,
+	} {
+		assertFileContains(t, helper, expected)
+	}
+}
+
+func TestCleanupAuditSupportsLoreKMSAndRuntimeSecret(t *testing.T) {
+	root := repositoryRoot(t)
+	audit := filepath.Join(root, ".agents/skills/deploy-unrealops-infrastructure/scripts/audit-cleanup.sh")
+
+	for _, expected := range []string{
+		`kms_key_ids+=("$2")`,
+		`runtime_secret_ids+=("$2")`,
+		`array_contains "$arn" "${kms_key_ids[@]}"`,
+		`"alias/$environment-lore"`,
+		`for kms_key_id in "${kms_key_ids[@]}"`,
+		`for runtime_secret_id in "${runtime_secret_ids[@]}"`,
+		`--retained-state-bucket-arn`,
+		`aws ec2 describe-fleets`,
+		`arn:aws:ec2:"$region":"$account_id":* | arn:aws:eks:"$region":"$account_id":*`,
+		`"/aws/otel/containerinsights/$environment/application"`,
+	} {
+		assertFileContains(t, audit, expected)
 	}
 }
 

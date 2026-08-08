@@ -27,3 +27,29 @@ output "ami_alias" {
   description = "Pinned AL2023 AMI alias selected by the EC2NodeClass."
   value       = var.ami_alias
 }
+
+output "aws_load_balancer_controller_version" {
+  description = "Installed AWS Load Balancer Controller chart version, or null when Lore dependencies are disabled."
+  value       = var.enable_lore_dependencies ? var.aws_load_balancer_controller_version : null
+}
+
+output "secrets_store_csi_driver_version" {
+  description = "Installed Secrets Store CSI Driver chart version, or null when Lore dependencies are disabled."
+  value       = var.enable_lore_dependencies ? var.secrets_store_csi_driver_version : null
+}
+
+output "secrets_store_csi_provider_aws_version" {
+  description = "Installed AWS Secrets Store CSI provider chart version, or null when Lore dependencies are disabled."
+  value       = var.enable_lore_dependencies ? var.secrets_store_csi_provider_aws_version : null
+}
+
+output "lore_dependencies_ready" {
+  description = "Dependency token that becomes ready after every Lore cluster controller is installed."
+  value       = var.enable_lore_dependencies
+
+  depends_on = [
+    helm_release.aws_load_balancer_controller,
+    helm_release.secrets_store_csi_driver,
+    helm_release.secrets_store_csi_provider_aws,
+  ]
+}

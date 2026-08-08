@@ -74,8 +74,15 @@ variable "system_node_group_size" {
   }
 
   validation {
-    condition     = var.system_node_group_size.min >= 2 && var.system_node_group_size.min <= var.system_node_group_size.desired && var.system_node_group_size.desired <= var.system_node_group_size.max
-    error_message = "system_node_group_size must keep at least two nodes and satisfy min <= desired <= max."
+    condition = (
+      var.system_node_group_size.min >= 2 &&
+      var.system_node_group_size.min <= var.system_node_group_size.desired &&
+      var.system_node_group_size.desired <= var.system_node_group_size.max &&
+      alltrue([
+        for size in values(var.system_node_group_size) : size == floor(size)
+      ])
+    )
+    error_message = "system_node_group_size values must be whole numbers, keep at least two nodes, and satisfy min <= desired <= max."
   }
 }
 
@@ -116,7 +123,7 @@ variable "access_entries" {
 }
 
 variable "enable_cluster_creator_admin_permissions" {
-  description = "Grant the Terraform caller cluster-admin through an EKS access entry. Disable after adding durable administrative access entries."
+  description = "Grant the Terraform caller cluster-admin through an EKS access entry. Automatically suppressed when the caller already has a durable access_entries entry; otherwise disable after adding durable administrative access."
   type        = bool
   default     = true
 }
@@ -136,6 +143,12 @@ variable "cloudwatch_log_retention_days" {
     condition     = contains([1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653], var.cloudwatch_log_retention_days)
     error_message = "cloudwatch_log_retention_days must be a CloudWatch Logs-supported retention period."
   }
+}
+
+variable "enable_lore_observability" {
+  description = "Install the pinned CloudWatch Observability add-on for Lore with OTel Container Insights and Pod Identity."
+  type        = bool
+  default     = false
 }
 
 variable "kms_key_administrators" {

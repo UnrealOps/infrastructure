@@ -1,6 +1,23 @@
 data "aws_partition" "current" {}
+data "aws_caller_identity" "current" {}
+
+data "aws_iam_session_context" "current" {
+  arn = data.aws_caller_identity.current.arn
+}
 
 data "aws_iam_policy_document" "ebs_csi_assume_role" {
+  statement {
+    sid     = "EKSPodIdentity"
+    actions = ["sts:AssumeRole", "sts:TagSession"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["pods.eks.amazonaws.com"]
+    }
+  }
+}
+
+data "aws_iam_policy_document" "cloudwatch_observability_assume_role" {
   statement {
     sid     = "EKSPodIdentity"
     actions = ["sts:AssumeRole", "sts:TagSession"]
@@ -25,13 +42,49 @@ resource "aws_iam_role_policy_attachment" "ebs_csi" {
   policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
 }
 
+resource "aws_iam_role" "cloudwatch_observability" {
+  count = var.enable_lore_observability ? 1 : 0
+
+  name               = "${var.cluster_name}-cloudwatch-observability"
+  description        = "EKS Pod Identity role for the CloudWatch Observability add-on"
+  assume_role_policy = data.aws_iam_policy_document.cloudwatch_observability_assume_role.json
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "cloudwatch_agent" {
+  count = var.enable_lore_observability ? 1 : 0
+
+  role       = aws_iam_role.cloudwatch_observability[0].name
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/CloudWatchAgentServerPolicy"
+}
+
+resource "aws_iam_role_policy_attachment" "cloudwatch_xray" {
+  count = var.enable_lore_observability ? 1 : 0
+
+  role       = aws_iam_role.cloudwatch_observability[0].name
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AWSXrayWriteOnlyAccess"
+}
+
 locals {
   control_plane_subnet_ids = length(var.control_plane_subnet_ids) > 0 ? var.control_plane_subnet_ids : var.private_subnet_ids
+  caller_principal_arn     = data.aws_iam_session_context.current.issuer_arn
+  caller_has_access_entry = anytrue([
+    for entry in values(var.access_entries) : entry.principal_arn == local.caller_principal_arn
+  ])
+  enable_cluster_creator_admin_permissions = var.enable_cluster_creator_admin_permissions && !local.caller_has_access_entry
+  container_insights_log_group_suffixes = toset([
+    "application",
+    "dataplane",
+    "host",
+    "performance",
+  ])
 
   cluster_addons = {
     vpc-cni = {
       addon_version               = local.cluster_addon_versions.vpc_cni
       before_compute              = true
+      configuration_values        = jsonencode({ enableNetworkPolicy = "true" })
       most_recent                 = false
       resolve_conflicts_on_create = "OVERWRITE"
       resolve_conflicts_on_update = "OVERWRITE"
@@ -66,6 +119,40 @@ locals {
       }]
     }
   }
+
+  cloudwatch_observability_configuration = jsonencode({
+    containerInsights = {
+      enabled = false
+    }
+    otelContainerInsights = {
+      enabled = true
+    }
+    manager = {
+      applicationSignals = {
+        autoMonitor = {
+          monitorAllServices = false
+        }
+      }
+    }
+  })
+}
+
+resource "aws_cloudwatch_log_group" "container_insights" {
+  for_each = var.enable_lore_observability ? local.container_insights_log_group_suffixes : toset([])
+
+  name              = "/aws/containerinsights/${var.cluster_name}/${each.value}"
+  retention_in_days = var.cloudwatch_log_retention_days
+
+  tags = var.tags
+}
+
+resource "aws_cloudwatch_log_group" "otel_container_insights_application" {
+  count = var.enable_lore_observability ? 1 : 0
+
+  name              = "/aws/otel/containerinsights/${var.cluster_name}/application"
+  retention_in_days = var.cloudwatch_log_retention_days
+
+  tags = var.tags
 }
 
 module "eks" {
@@ -76,7 +163,7 @@ module "eks" {
   kubernetes_version = local.cluster_version
 
   authentication_mode                      = "API"
-  enable_cluster_creator_admin_permissions = var.enable_cluster_creator_admin_permissions
+  enable_cluster_creator_admin_permissions = local.enable_cluster_creator_admin_permissions
   access_entries                           = var.access_entries
 
   endpoint_private_access = true
@@ -180,4 +267,31 @@ module "eks" {
   })
 
   tags = var.tags
+}
+
+resource "aws_eks_addon" "cloudwatch_observability" {
+  count = var.enable_lore_observability ? 1 : 0
+
+  cluster_name         = module.eks.cluster_name
+  addon_name           = "amazon-cloudwatch-observability"
+  addon_version        = local.cluster_addon_versions.cloudwatch_observability
+  configuration_values = local.cloudwatch_observability_configuration
+
+  pod_identity_association {
+    role_arn        = aws_iam_role.cloudwatch_observability[0].arn
+    service_account = "cloudwatch-agent"
+  }
+
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "OVERWRITE"
+
+  tags = var.tags
+
+  depends_on = [
+    module.eks,
+    aws_cloudwatch_log_group.container_insights,
+    aws_cloudwatch_log_group.otel_container_insights_application,
+    aws_iam_role_policy_attachment.cloudwatch_agent,
+    aws_iam_role_policy_attachment.cloudwatch_xray,
+  ]
 }

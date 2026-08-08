@@ -10,7 +10,11 @@ Run the complete billable UnrealOps Terratest suite with isolated PKI and cleanu
 Usage:
   run-acceptance.sh --engine tofu|terraform --account-id 123456789012 \
     --region us-west-2 --run-id tofu-12345 --confirm-billable \
-    [--work-dir PATH] [--openvpn-connect-cli PATH]
+    [--work-dir PATH] [--openvpn-connect-cli PATH] \
+    [--lore-image ECR_URI@sha256:DIGEST --lore-client PATH]
+
+Lore acceptance is opt-in. --lore-image and --lore-client must be supplied
+together; the wrapper creates a separate encrypted Lore CA and runtime secret.
 EOF
 }
 
@@ -29,6 +33,8 @@ region=""
 run_id=""
 work_dir=""
 connect_cli=""
+lore_image=""
+lore_client=""
 confirmed="false"
 
 while (($#)); do
@@ -57,6 +63,14 @@ while (($#)); do
 		connect_cli="${2:-}"
 		shift 2
 		;;
+	--lore-image)
+		lore_image="${2:-}"
+		shift 2
+		;;
+	--lore-client)
+		lore_client="${2:-}"
+		shift 2
+		;;
 	--confirm-billable)
 		confirmed="true"
 		shift
@@ -75,6 +89,15 @@ done
 [[ ${#run_id} -le 16 && "$run_id" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] ||
 	die "--run-id must be 1-16 lowercase letters, digits, or hyphens and cannot start/end with a hyphen"
 [[ "$confirmed" == "true" ]] || die "--confirm-billable is required"
+if [[ -n "$lore_image" || -n "$lore_client" ]]; then
+	[[ -n "$lore_image" && -n "$lore_client" ]] ||
+		die "--lore-image and --lore-client must be supplied together"
+	[[ "$lore_image" =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9][a-z0-9/_-]*@sha256:[0-9a-f]{64}$ ]] ||
+		die "--lore-image must be an immutable private ECR URI ending in @sha256:<64 lowercase hex characters>"
+	[[ "${lore_image%%/*}" == "${account_id}.dkr.ecr.${region}.amazonaws.com" ]] ||
+		die "--lore-image must be in the explicitly authorized AWS account and region's private ECR registry"
+	[[ -x "$lore_client" ]] || die "--lore-client must point to an executable Lore v0.8.5 client"
+fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../../.." && pwd)"
@@ -332,12 +355,14 @@ audit_completed="false"
 secrets_terminal="false"
 secret_ids=()
 kms_key_arn=""
+lore_kms_key_arn=""
 kms_watch_pid=""
 kms_watch_stop_file="$work_dir/.stop-kms-evidence-watch"
 pki_env="acc-$run_id"
 complete_pki_env="acc-$run_id-complete"
 secret_name="unrealops/acceptance/$pki_env/openvpn"
 complete_secret_name="unrealops/acceptance/$complete_pki_env/openvpn"
+lore_secret_name="unrealops/$e2e_name/lore/runtime"
 
 secret_absent() {
 	local secret_id="$1" error_file
@@ -386,51 +411,70 @@ delete_secret() {
 }
 
 capture_kms_evidence() {
-	local candidate="" manifest_file="$work_dir/run-manifest.json"
+	local candidate="" lore_candidate="" manifest_file="$work_dir/run-manifest.json"
 	local state_file="$repo_root/terraform/examples/complete/foundation/terraform.tfstate"
 	local manifest_tmp
 
-	if [[ -n "$kms_key_arn" ]]; then
+	if [[ -n "$kms_key_arn" && (-z "$lore_image" || -n "$lore_kms_key_arn") ]]; then
 		return 0
 	fi
 
 	if [[ -f "$manifest_file" ]]; then
 		candidate="$(jq -r '.cleanup_evidence.eks_kms_key.arn // .kms_key_arn // empty' "$manifest_file")" ||
 			return 1
+		lore_candidate="$(jq -r '.cleanup_evidence.lore_kms_key.arn // empty' "$manifest_file")" ||
+			return 1
 	fi
 	if [[ -z "$candidate" && -f "$work_dir/acceptance.log" ]]; then
 		candidate="$(sed -n 's/^.*UNREALOPS_ACCEPTANCE_KMS_KEY_ARN=//p' \
 			"$work_dir/acceptance.log" | tail -1)"
 	fi
+	if [[ -n "$lore_image" && -z "$lore_candidate" && -f "$work_dir/acceptance.log" ]]; then
+		lore_candidate="$(sed -n 's/^.*UNREALOPS_ACCEPTANCE_LORE_KMS_KEY_ARN=//p' \
+			"$work_dir/acceptance.log" | tail -1)"
+	fi
 	if [[ -z "$candidate" && -f "$state_file" ]]; then
-		candidate="$(jq -r '
-      first(
-        .resources[]?
-        | select(.mode == "managed" and .type == "aws_kms_key")
-        | .instances[]?.attributes.arn
-        | select(. != null and . != "")
-      ) // empty
-    ' "$state_file" 2>/dev/null)" || return 1
+		candidate="$(jq -r '.outputs.cluster_kms_key_arn.value // empty' "$state_file" 2>/dev/null)" ||
+			return 1
+	fi
+	if [[ -n "$lore_image" && -z "$lore_candidate" && -f "$state_file" ]]; then
+		lore_candidate="$(jq -r '.outputs.lore_kms_key_arn.value // empty' "$state_file" 2>/dev/null)" ||
+			return 1
 	fi
 
-	[[ -n "$candidate" ]] || return 0
-	if [[ "$candidate" != arn:*:kms:"$region":"$account_id":key/* ]]; then
+	if [[ -n "$candidate" && "$candidate" != arn:*:kms:"$region":"$account_id":key/* ]]; then
 		printf 'error: refusing KMS evidence outside account %s and region %s: %s\n' \
 			"$account_id" "$region" "$candidate" >&2
 		return 1
 	fi
+	if [[ -n "$lore_candidate" && "$lore_candidate" != arn:*:kms:"$region":"$account_id":key/* ]]; then
+		printf 'error: refusing Lore KMS evidence outside account %s and region %s: %s\n' \
+			"$account_id" "$region" "$lore_candidate" >&2
+		return 1
+	fi
 
 	kms_key_arn="$candidate"
+	lore_kms_key_arn="$lore_candidate"
 	if [[ -f "$manifest_file" ]]; then
 		manifest_tmp="$manifest_file.tmp"
-		jq --arg kms_key_arn "$kms_key_arn" '
+		jq --arg kms_key_arn "$kms_key_arn" --arg lore_kms_key_arn "$lore_kms_key_arn" '
       del(.kms_key_arn)
-      | .cleanup_evidence.eks_kms_key = {
-          arn: $kms_key_arn,
-          owner_type: "eks-cluster",
-          owner_name: .names.e2e,
-          captured_from: "terraform-output:cluster_kms_key_arn"
-        }
+      | if $kms_key_arn != "" then
+          .cleanup_evidence.eks_kms_key = {
+            arn: $kms_key_arn,
+            owner_type: "eks-cluster",
+            owner_name: .names.e2e,
+            captured_from: "terraform-output:cluster_kms_key_arn"
+          }
+        else . end
+      | if $lore_kms_key_arn != "" then
+          .cleanup_evidence.lore_kms_key = {
+            arn: $lore_kms_key_arn,
+            owner_type: "lore-cluster",
+            owner_name: .names.e2e,
+            captured_from: "terraform-output:lore_kms_key_arn"
+          }
+        else . end
     ' \
 			"$manifest_file" >"$manifest_tmp" || return 1
 		mv "$manifest_tmp" "$manifest_file" || return 1
@@ -439,7 +483,8 @@ capture_kms_evidence() {
 
 watch_kms_evidence() {
 	while [[ ! -e "$kms_watch_stop_file" ]]; do
-		if capture_kms_evidence && [[ -n "$kms_key_arn" ]]; then
+		if capture_kms_evidence &&
+			[[ -n "$kms_key_arn" && (-z "$lore_image" || -n "$lore_kms_key_arn") ]]; then
 			return 0
 		fi
 		sleep 2
@@ -500,7 +545,11 @@ on_exit() {
 }
 trap on_exit EXIT
 
-for secret_id in "$secret_name" "$complete_secret_name"; do
+secrets_to_reserve=("$secret_name" "$complete_secret_name")
+if [[ -n "$lore_image" ]]; then
+	secrets_to_reserve+=("$lore_secret_name")
+fi
+for secret_id in "${secrets_to_reserve[@]}"; do
 	secret_absent "$secret_id" || die "runtime secret already exists or cannot be proven absent: $secret_id"
 done
 
@@ -525,6 +574,10 @@ live_test_variables=(
 	TEST_COMPLETE_OPENVPN_RUNTIME_SECRET_ARN
 	TEST_COMPLETE_OPENVPN_PROFILE
 	TEST_OPENVPN_CONNECT_CLI
+	TEST_LORE_IMAGE
+	TEST_LORE_RUNTIME_SECRET_NAME
+	TEST_LORE_CA_FILE
+	TEST_LORE_CLIENT
 )
 for variable in "${live_test_variables[@]}"; do
 	unset "$variable"
@@ -551,6 +604,12 @@ secret_ids+=("$reserved_secret_arn")
 reserved_complete_secret_arn="$(reserve_secret "$complete_secret_name" Environment "$e2e_name")" ||
 	die "failed to reserve runtime secret atomically: $complete_secret_name"
 secret_ids+=("$reserved_complete_secret_arn")
+reserved_lore_secret_arn=""
+if [[ -n "$lore_image" ]]; then
+	reserved_lore_secret_arn="$(reserve_secret "$lore_secret_name" Environment "$e2e_name")" ||
+		die "failed to reserve Lore runtime secret atomically: $lore_secret_name"
+	secret_ids+=("$reserved_lore_secret_arn")
+fi
 
 jq -n \
 	--arg account_id "$account_id" --arg region "$region" --arg engine "$engine" --arg run_id "$run_id" \
@@ -558,6 +617,8 @@ jq -n \
 	--arg network_name "$network_name" --arg vpn_name "$vpn_name" \
 	--arg secret_name "$secret_name" --arg complete_secret_name "$complete_secret_name" \
 	--arg secret_arn "$reserved_secret_arn" --arg complete_secret_arn "$reserved_complete_secret_arn" \
+	--arg lore_secret_name "$lore_secret_name" --arg lore_secret_arn "$reserved_lore_secret_arn" \
+	--arg lore_image "$lore_image" \
 	'{
     account_id:$account_id,
     region:$region,
@@ -565,9 +626,11 @@ jq -n \
     run_id:$run_id,
     pki_root:$pki_root,
     names:{e2e:$e2e_name,network:$network_name,openvpn:$vpn_name},
-    secret_names:{openvpn:$secret_name,complete:$complete_secret_name},
+    secret_names:{openvpn:$secret_name,complete:$complete_secret_name,lore:$lore_secret_name},
     secret_arn:$secret_arn,
-    complete_secret_arn:$complete_secret_arn
+    complete_secret_arn:$complete_secret_arn,
+    lore_secret_arn:$lore_secret_arn,
+    lore_image:$lore_image
   }' \
 	>"$work_dir/run-manifest.json"
 
@@ -581,11 +644,32 @@ scripts/openvpn-pki.sh init --environment "$complete_pki_env" --region "$region"
 	--secret-id "$reserved_complete_secret_arn"
 scripts/openvpn-pki.sh client --environment "$complete_pki_env" --name complete-user --endpoint 127.0.0.1
 
+if [[ -n "$lore_image" ]]; then
+	lore_pass_in="$work_dir/lore-ca-pass-in"
+	lore_pass_out="$work_dir/lore-ca-pass-out"
+	openssl rand -out "$lore_pass_in" -hex 32
+	cp "$lore_pass_in" "$lore_pass_out"
+	chmod 0600 "$lore_pass_in" "$lore_pass_out"
+	export LORE_PKI_ROOT="$work_dir/lore-pki"
+	export LORE_CA_PASSIN="file:$lore_pass_in"
+	export LORE_CA_PASSOUT="file:$lore_pass_out"
+	assert_account_scope || die "AWS account changed before Lore runtime upload"
+	scripts/lore-pki.sh init \
+		--cluster-name "$e2e_name" \
+		--region "$region" \
+		--secret-id "$reserved_lore_secret_arn"
+fi
+
 secret_arn="$(jq -er '.secret_id' "$OPENVPN_PKI_ROOT/$pki_env/metadata.json")"
 complete_secret_arn="$(jq -er '.secret_id' "$OPENVPN_PKI_ROOT/$complete_pki_env/metadata.json")"
 [[ "$secret_arn" == "$reserved_secret_arn" ]] || die "OpenVPN runtime secret ownership changed unexpectedly"
 [[ "$complete_secret_arn" == "$reserved_complete_secret_arn" ]] ||
 	die "complete-stack OpenVPN runtime secret ownership changed unexpectedly"
+if [[ -n "$lore_image" ]]; then
+	lore_secret_arn="$(jq -er '.secret_id' "$LORE_PKI_ROOT/$e2e_name/metadata.json")"
+	[[ "$lore_secret_arn" == "$reserved_lore_secret_arn" ]] ||
+		die "Lore runtime secret ownership changed unexpectedly"
+fi
 
 export TF_ACC=1
 export TERRAFORM_BINARY="$engine"
@@ -600,6 +684,12 @@ export TEST_COMPLETE_OPENVPN_RUNTIME_SECRET_ARN="$complete_secret_arn"
 export TEST_COMPLETE_OPENVPN_PROFILE="$OPENVPN_PKI_ROOT/$complete_pki_env/profiles/complete-user.ovpn"
 if [[ -n "$connect_cli" ]]; then
 	export TEST_OPENVPN_CONNECT_CLI="$connect_cli"
+fi
+if [[ -n "$lore_image" ]]; then
+	export TEST_LORE_IMAGE="$lore_image"
+	export TEST_LORE_RUNTIME_SECRET_NAME="$lore_secret_name"
+	export TEST_LORE_CA_FILE="$LORE_PKI_ROOT/$e2e_name/ca.crt"
+	export TEST_LORE_CLIENT="$lore_client"
 fi
 
 rm -f "$kms_watch_stop_file"
@@ -618,8 +708,9 @@ if ((test_log_status != 0)); then
 	test_status=1
 fi
 
-if ! capture_kms_evidence || [[ -z "$kms_key_arn" ]]; then
-	printf 'Run-linked EKS KMS evidence is unavailable; cleanup will continue, but the final audit must remain non-passing.\n' >&2
+if ! capture_kms_evidence || [[ -z "$kms_key_arn" ||
+	(-n "$lore_image" && -z "$lore_kms_key_arn") ]]; then
+	printf 'Run-linked KMS evidence is incomplete; cleanup will continue, but the final audit must remain non-passing.\n' >&2
 fi
 
 states_clean="true"
@@ -647,12 +738,11 @@ audit_wait_seconds=0
 if [[ "$states_clean" == "true" && "$inventory_clean" == "true" ]]; then
 	cleanup_ready="true"
 	audit_wait_seconds=900
-	if ! delete_secret "$secret_arn"; then
-		secret_cleanup_status=1
-	fi
-	if ! delete_secret "$complete_secret_arn"; then
-		secret_cleanup_status=1
-	fi
+	for runtime_secret_id in "${secret_ids[@]}"; do
+		if ! delete_secret "$runtime_secret_id"; then
+			secret_cleanup_status=1
+		fi
+	done
 	if ((secret_cleanup_status == 0)); then
 		secrets_terminal="true"
 	fi
@@ -660,10 +750,14 @@ else
 	printf 'Runtime secrets and PKI were preserved at %s for recovery.\n' "$work_dir" >&2
 fi
 
+audit_secret_args=()
+for runtime_secret_id in "${secret_ids[@]}"; do
+	audit_secret_args+=(--secret-id "$runtime_secret_id")
+done
 set +e
 "$audit_script" --account-id "$account_id" --region "$region" --run-id "$run_id" \
 	--manifest "$work_dir/run-manifest.json" \
-	--secret-id "$secret_arn" --secret-id "$complete_secret_arn" \
+	"${audit_secret_args[@]}" \
 	--wait-seconds "$audit_wait_seconds" \
 	2>&1 | tee "$work_dir/cleanup-audit.log"
 audit_pipeline_status=("${PIPESTATUS[@]}")

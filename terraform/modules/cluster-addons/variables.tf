@@ -18,6 +18,57 @@ variable "cluster_endpoint" {
   }
 }
 
+variable "aws_region" {
+  description = "AWS region containing the EKS cluster. Required when Lore controller dependencies are enabled."
+  type        = string
+  default     = null
+}
+
+variable "vpc_id" {
+  description = "VPC ID supplied to the AWS Load Balancer Controller. Required when Lore controller dependencies are enabled."
+  type        = string
+  default     = null
+}
+
+variable "enable_lore_dependencies" {
+  description = "Install the pinned AWS Load Balancer Controller and Secrets Store CSI components required by Lore."
+  type        = bool
+  default     = false
+}
+
+variable "aws_load_balancer_controller_version" {
+  description = "Repository-tested AWS Load Balancer Controller chart version."
+  type        = string
+  default     = "3.4.3"
+
+  validation {
+    condition     = var.aws_load_balancer_controller_version == "3.4.3"
+    error_message = "This module release supports only AWS Load Balancer Controller chart 3.4.3."
+  }
+}
+
+variable "secrets_store_csi_driver_version" {
+  description = "Repository-tested Secrets Store CSI Driver chart version."
+  type        = string
+  default     = "1.6.0"
+
+  validation {
+    condition     = var.secrets_store_csi_driver_version == "1.6.0"
+    error_message = "This module release supports only Secrets Store CSI Driver chart 1.6.0."
+  }
+}
+
+variable "secrets_store_csi_provider_aws_version" {
+  description = "Repository-tested AWS Secrets Store CSI provider chart version."
+  type        = string
+  default     = "3.1.2"
+
+  validation {
+    condition     = var.secrets_store_csi_provider_aws_version == "3.1.2"
+    error_message = "This module release supports only AWS Secrets Store CSI provider chart 3.1.2."
+  }
+}
+
 variable "node_iam_role_name" {
   description = "Name of the Karpenter node IAM role created by karpenter-infra."
   type        = string

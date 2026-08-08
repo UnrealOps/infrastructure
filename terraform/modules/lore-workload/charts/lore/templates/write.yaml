@@ -1,0 +1,192 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lore-write
+  namespace: lore
+  labels:
+    {{- include "lore.labels" . | nindent 4 }}
+    app.kubernetes.io/component: write
+spec:
+  replicas: {{ .Values.write.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lore
+      app.kubernetes.io/component: write
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lore
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: write
+      annotations:
+        kubectl.kubernetes.io/default-container: lore
+        checksum/config: {{ include (print $.Template.BasePath "/configmaps.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: lore-write
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        {{- include "lore.podSecurityContext" . | nindent 8 }}
+      nodeSelector:
+        unrealops.io/capacity-provider: karpenter
+        karpenter.sh/capacity-type: on-demand
+        kubernetes.io/arch: amd64
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: lore
+                  app.kubernetes.io/component: write
+              topologyKey: kubernetes.io/hostname
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: lore
+              app.kubernetes.io/component: write
+      containers:
+        - name: lore
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: LORE_CONFIG_PATH
+              value: /etc/lore/config
+            - name: LORE_ENV
+              value: production
+            - name: LORE_PLATFORM_REGION
+              value: {{ .Values.aws.region | quote }}
+            - name: LORE_CA_CERT_FILE
+              value: /etc/lore/certs/ca.crt
+            - name: TMPDIR
+              value: /tmp
+            - name: HOME
+              value: /tmp
+          ports:
+            - name: grpc
+              containerPort: 41337
+              protocol: TCP
+            - name: replication
+              containerPort: 41340
+              protocol: UDP
+            - name: health
+              containerPort: 41339
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "4"
+              memory: 8Gi
+              ephemeral-storage: 30Gi
+            limits:
+              cpu: "8"
+              memory: 16Gi
+              ephemeral-storage: 30Gi
+          securityContext:
+            {{- include "lore.containerSecurityContext" . | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: /health_check
+              port: health
+              scheme: HTTP
+            failureThreshold: 60
+            periodSeconds: 5
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /health_check
+              port: health
+              scheme: HTTP
+            failureThreshold: 3
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: health
+            failureThreshold: 3
+            periodSeconds: 20
+            timeoutSeconds: 3
+          volumeMounts:
+            - name: config
+              mountPath: /etc/lore/config
+              readOnly: true
+            - name: runtime-certs
+              mountPath: /etc/lore/certs
+              readOnly: true
+            - name: cache
+              mountPath: /var/lib/lore
+            - name: tmp
+              mountPath: /tmp
+        - name: certificate-exporter
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              while true; do
+                expiry="$(openssl x509 -in /etc/lore/certs/write.crt -enddate -noout | cut -d= -f2)"
+                expiry_epoch="$(date -d "${expiry}" +%s)"
+                now_epoch="$(date +%s)"
+                days="$(( (expiry_epoch - now_epoch) / 86400 ))"
+                timestamp="$(date +%s)000000000"
+                payload="$(printf '{"resourceMetrics":[{"resource":{"attributes":[{"key":"cluster","value":{"stringValue":"%s"}}]},"scopeMetrics":[{"scope":{"name":"unrealops.lore.certificates"},"metrics":[{"name":"lore_certificate_days_until_expiry","gauge":{"dataPoints":[{"attributes":[{"key":"cluster","value":{"stringValue":"%s"}},{"key":"tier","value":{"stringValue":"write"}}],"timeUnixNano":"%s","asDouble":%s}]}}]}]}]}' {{ .Values.clusterName | quote }} {{ .Values.clusterName | quote }} "${timestamp}" "${days}")"
+                if curl --fail --silent --show-error -H 'Content-Type: application/json' -d "${payload}" http://lore-otel.lore.svc.cluster.local:4318/v1/metrics; then
+                  sleep 3600
+                else
+                  echo "certificate telemetry endpoint unavailable; retrying in 30 seconds" >&2
+                  sleep 30
+                fi
+              done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            {{- include "lore.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: runtime-certs
+              mountPath: /etc/lore/certs
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: lore-write-config
+        - name: runtime-certs
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: lore-write-runtime
+        - name: cache
+          emptyDir:
+            sizeLimit: 30Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: lore-write
+  namespace: lore
+  labels:
+    {{- include "lore.labels" . | nindent 4 }}
+    app.kubernetes.io/component: write
+spec:
+  minAvailable: {{ max 0 (sub (.Values.write.replicas | int) 1) }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lore
+      app.kubernetes.io/component: write

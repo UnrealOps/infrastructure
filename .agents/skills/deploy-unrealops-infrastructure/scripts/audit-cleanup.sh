@@ -8,14 +8,18 @@ Verify empty managed state and absence of resources owned by one UnrealOps envir
 
 Usage:
   audit-cleanup.sh --account-id 123456789012 --region REGION \
-    --environment studio-prod --engine tofu --kms-key-id KMS_KEY_ARN \
-    --runtime-secret-id SECRET_ARN --vpc-id VPC_ID \
+    --environment studio-prod --engine tofu \
+    --kms-key-id KMS_KEY_ARN [--kms-key-id LORE_KMS_KEY_ARN] \
+    --runtime-secret-id SECRET_ARN [--runtime-secret-id LORE_SECRET_ARN] \
+    --vpc-id VPC_ID \
     --foundation-lineage UUID --addons-lineage UUID \
     (--no-route53-record | \
       --route53-zone-id ZONE_ID --route53-record-name VPN_DNS_NAME) \
+    [--retained-state-bucket-arn arn:aws:s3:::BUCKET] \
     [--allow-active-runtime-secret]
 
 Initialize both roots against their durable backends before running this audit.
+The KMS and runtime-secret options are repeatable for Lore-enabled deployments.
 The audit is read-only. A deleted KMS key may remain only when disabled and in
 PendingDeletion with no alias. A runtime secret scheduled for recovery-window
 deletion is accepted; an active runtime secret is not.
@@ -31,13 +35,14 @@ account_id=""
 region=""
 environment=""
 engine=""
-kms_key_id=""
-runtime_secret_id=""
+kms_key_ids=()
+runtime_secret_ids=()
 vpc_id=""
 foundation_lineage=""
 addons_lineage=""
 route53_zone_id=""
 route53_record_name=""
+retained_state_bucket_arn=""
 no_route53_record=false
 allow_active_runtime_secret=false
 
@@ -65,12 +70,12 @@ while (($#)); do
       ;;
     --kms-key-id)
       (($# >= 2)) || die "$1 requires a value"
-      kms_key_id="$2"
+      kms_key_ids+=("$2")
       shift 2
       ;;
     --runtime-secret-id)
       (($# >= 2)) || die "$1 requires a value"
-      runtime_secret_id="$2"
+      runtime_secret_ids+=("$2")
       shift 2
       ;;
     --vpc-id)
@@ -98,6 +103,11 @@ while (($#)); do
       route53_record_name="$2"
       shift 2
       ;;
+    --retained-state-bucket-arn)
+      (($# >= 2)) || die "$1 requires a value"
+      retained_state_bucket_arn="$2"
+      shift 2
+      ;;
     --no-route53-record)
       no_route53_record=true
       shift
@@ -121,8 +131,8 @@ case "$engine" in
   tofu | terraform) ;;
   *) die "--engine must be tofu or terraform" ;;
 esac
-[[ -n "$kms_key_id" ]] || die "--kms-key-id is required"
-[[ -n "$runtime_secret_id" ]] || die "--runtime-secret-id is required"
+((${#kms_key_ids[@]} > 0)) || die "at least one --kms-key-id is required"
+((${#runtime_secret_ids[@]} > 0)) || die "at least one --runtime-secret-id is required"
 [[ "$vpc_id" =~ ^vpc-[0-9a-f]+$ ]] || die "--vpc-id must be an AWS VPC ID"
 lineage_pattern='^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'
 [[ "$foundation_lineage" =~ $lineage_pattern ]] || die "invalid --foundation-lineage"
@@ -136,10 +146,18 @@ else
   [[ -n "$route53_zone_id" && -n "$route53_record_name" ]] ||
     die "supply --no-route53-record or both Route 53 coordinates"
 fi
-[[ "$kms_key_id" == arn:*:kms:"$region":"$account_id":key/* ]] ||
-  die "--kms-key-id must be a KMS key ARN in the expected account and region"
-[[ "$runtime_secret_id" == arn:*:secretsmanager:"$region":"$account_id":secret:* ]] ||
-  die "--runtime-secret-id must be a Secrets Manager ARN in the expected account and region"
+for kms_key_id in "${kms_key_ids[@]}"; do
+  [[ "$kms_key_id" == arn:*:kms:"$region":"$account_id":key/* ]] ||
+    die "--kms-key-id must be a KMS key ARN in the expected account and region"
+done
+for runtime_secret_id in "${runtime_secret_ids[@]}"; do
+  [[ "$runtime_secret_id" == arn:*:secretsmanager:"$region":"$account_id":secret:* ]] ||
+    die "--runtime-secret-id must be a Secrets Manager ARN in the expected account and region"
+done
+if [[ -n "$retained_state_bucket_arn" ]]; then
+  [[ "$retained_state_bucket_arn" == arn:aws:s3:::* ]] ||
+    die "--retained-state-bucket-arn must be an S3 bucket ARN"
+fi
 command -v aws >/dev/null 2>&1 || die "aws is required"
 command -v jq >/dev/null 2>&1 || die "jq is required"
 command -v "$engine" >/dev/null 2>&1 || die "$engine is required"
@@ -165,6 +183,15 @@ record_output() {
   local label="$1" output="$2"
   output="$(tr '\t' '\n' <<<"$output" | sed '/^$/d;/^None$/d' | sort -u)"
   [[ -z "$output" ]] || record "$label: $(tr '\n' ' ' <<<"$output")"
+}
+
+array_contains() {
+  local needle="$1" item
+  shift
+  for item in "$@"; do
+    [[ "$item" == "$needle" ]] && return 0
+  done
+  return 1
 }
 
 kms_is_safe_remnant() {
@@ -202,10 +229,20 @@ check_tagged_resources() {
     --tag-filters "Key=$key,Values=$value" \
     --query 'ResourceTagMappingList[].ResourceARN' --output text)"
   for arn in $output; do
-    [[ "$arn" == "$runtime_secret_id" ]] && continue
-    if [[ "$arn" == "$kms_key_id" ]] && kms_is_safe_remnant "$arn"; then
+    array_contains "$arn" "${runtime_secret_ids[@]}" && continue
+    if array_contains "$arn" "${kms_key_ids[@]}" && kms_is_safe_remnant "$arn"; then
       continue
     fi
+    [[ -n "$retained_state_bucket_arn" && "$arn" == "$retained_state_bucket_arn" ]] &&
+      continue
+    case "$arn" in
+      arn:aws:ec2:"$region":"$account_id":* | arn:aws:eks:"$region":"$account_id":*)
+        # EC2 and EKS retain terminal entries in the Resource Groups Tagging
+        # API after their service APIs report deletion. The exact active-state
+        # checks below are authoritative for these resource families.
+        continue
+        ;;
+    esac
     record "tagged resource remains ($key=$value): $arn"
   done
 }
@@ -217,6 +254,11 @@ check_ec2_resources() {
     'Name=instance-state-name,Values=pending,running,shutting-down,stopping,stopped' \
     --query 'Reservations[].Instances[].InstanceId' --output text)"
   record_output "active EC2 instances ($key=$value)" "$output"
+
+  output="$(aws ec2 describe-fleets --region "$region" --filters \
+    "Name=tag:$key,Values=$value" \
+    --query 'Fleets[?FleetState!=`deleted`].FleetId' --output text)"
+  record_output "active EC2 fleets ($key=$value)" "$output"
 
   output="$(aws ec2 describe-volumes --region "$region" --filters "Name=tag:$key,Values=$value" \
     --query 'Volumes[].VolumeId' --output text)"
@@ -442,7 +484,13 @@ fi
 for log_group in \
   "/aws/eks/$environment/cluster" \
   "/unrealops/$environment/openvpn" \
-  "/aws/vpc-flow-log/$vpc_id"; do
+  "/aws/vpc-flow-log/$vpc_id" \
+  "/aws/containerinsights/$environment/application" \
+  "/aws/containerinsights/$environment/dataplane" \
+  "/aws/containerinsights/$environment/host" \
+  "/aws/containerinsights/$environment/performance" \
+  "/aws/otel/containerinsights/$environment/application" \
+  "/aws/lore/$environment/metrics"; do
   output="$(aws logs describe-log-groups --region "$region" --log-group-name-prefix "$log_group" \
     --query "logGroups[?logGroupName==\`$log_group\`].logGroupName" --output text)"
   record_output "CloudWatch log groups" "$output"
@@ -462,19 +510,23 @@ while IFS=$'\t' read -r name arn; do
   fi
 done <<<"$event_rules_tsv"
 
-alias_count="$(aws kms list-aliases --region "$region" --query \
-  "length(Aliases[?AliasName==\`alias/eks/$environment\`])" --output text)"
-[[ "$alias_count" == "0" ]] || record "KMS alias remains: alias/eks/$environment"
-if aliases_output="$(aws kms list-aliases --region "$region" --key-id "$kms_key_id" \
-  --output json 2>"$error_file")"; then
-  target_aliases="$(jq -r '.Aliases[]?.AliasName' <<<"$aliases_output")"
-  record_output "KMS aliases targeting recorded key" "$target_aliases"
-elif ! grep -q 'NotFoundException' "$error_file"; then
-  cat "$error_file" >&2
-  die "could not audit aliases for KMS key $kms_key_id"
-fi
-kms_is_safe_remnant "$kms_key_id" true true ||
-  record "KMS key is not deleted or safely pending deletion: $kms_key_id"
+for expected_alias in "alias/eks/$environment" "alias/$environment-lore"; do
+  alias_count="$(aws kms list-aliases --region "$region" --query \
+    "length(Aliases[?AliasName==\`$expected_alias\`])" --output text)"
+  [[ "$alias_count" == "0" ]] || record "KMS alias remains: $expected_alias"
+done
+for kms_key_id in "${kms_key_ids[@]}"; do
+  if aliases_output="$(aws kms list-aliases --region "$region" --key-id "$kms_key_id" \
+    --output json 2>"$error_file")"; then
+    target_aliases="$(jq -r '.Aliases[]?.AliasName' <<<"$aliases_output")"
+    record_output "KMS aliases targeting recorded key" "$target_aliases"
+  elif ! grep -q 'NotFoundException' "$error_file"; then
+    cat "$error_file" >&2
+    die "could not audit aliases for KMS key $kms_key_id"
+  fi
+  kms_is_safe_remnant "$kms_key_id" true true ||
+    record "KMS key is not deleted or safely pending deletion: $kms_key_id"
+done
 
 if [[ -n "$route53_zone_id" ]]; then
   normalized_route53_name="${route53_record_name%.}."
@@ -489,21 +541,23 @@ if [[ -n "$route53_zone_id" ]]; then
   record_output "Route 53 VPN A record" "$remaining_route53_record"
 fi
 
-if secret_output="$(aws secretsmanager describe-secret --region "$region" \
-  --secret-id "$runtime_secret_id" 2>"$error_file")"; then
-  deleted_date="$(jq -r '.DeletedDate // empty' <<<"$secret_output")"
-  if [[ -n "$deleted_date" ]]; then
-    printf 'Runtime secret scheduled for deletion: %s deletion=%s\n' \
-      "$runtime_secret_id" "$deleted_date"
-  elif [[ "$allow_active_runtime_secret" == "true" ]]; then
-    printf 'Expected retained runtime secret: %s\n' "$runtime_secret_id"
-  else
-    record "active runtime secret remains: $runtime_secret_id"
+for runtime_secret_id in "${runtime_secret_ids[@]}"; do
+  if secret_output="$(aws secretsmanager describe-secret --region "$region" \
+    --secret-id "$runtime_secret_id" 2>"$error_file")"; then
+    deleted_date="$(jq -r '.DeletedDate // empty' <<<"$secret_output")"
+    if [[ -n "$deleted_date" ]]; then
+      printf 'Runtime secret scheduled for deletion: %s deletion=%s\n' \
+        "$runtime_secret_id" "$deleted_date"
+    elif [[ "$allow_active_runtime_secret" == "true" ]]; then
+      printf 'Expected retained runtime secret: %s\n' "$runtime_secret_id"
+    else
+      record "active runtime secret remains: $runtime_secret_id"
+    fi
+  elif ! grep -q 'ResourceNotFoundException' "$error_file"; then
+    cat "$error_file" >&2
+    die "could not audit runtime secret"
   fi
-elif ! grep -q 'ResourceNotFoundException' "$error_file"; then
-  cat "$error_file" >&2
-  die "could not audit runtime secret"
-fi
+done
 
 if [[ -s "$findings_file" ]]; then
   printf 'Cleanup audit found active resources:\n' >&2
