@@ -4,6 +4,7 @@ For run ID `<id>`, derive these owners:
 
 ```text
 unrealops-e2e-<id>
+unrealops-bootstrap-<id>
 unrealops-network-<id>
 unrealops-vpn-<id>
 ```
@@ -12,6 +13,7 @@ Search only the explicitly authorized account and region. Use exact tag selector
 
 ```text
 Environment=unrealops-e2e-<id>
+Test=unrealops-bootstrap-<id>
 Test=unrealops-network-<id>
 Test=unrealops-vpn-<id>
 ClusterName=unrealops-e2e-<id>
@@ -40,6 +42,7 @@ Treat terminated EC2 instances, `deleted` NAT gateways, and secrets with a delet
 Constrain checks to exact run-owned names/tags:
 
 - OpenVPN roles and instance profiles for complete and fixture stacks.
+- Standalone `unrealops-bootstrap-<id>` EKS administrator test role and its inline discovery policy.
 - EKS cluster, system node, EBS CSI, CloudWatch Observability, Karpenter controller/node, AWS Load Balancer Controller, and Lore edge/write/OTel roles.
 - Cluster-encryption customer-managed policy and run-tagged VPC flow-log role/policy.
 - Karpenter-generated instance profile. Its name is `<cluster>_<hash>` rather than the module's hyphenated IAM names; require the cluster's ownership or discovery tag before treating it as run-owned.
@@ -49,6 +52,6 @@ Do not delete shared AWS service-linked roles for EKS, Auto Scaling, or EC2 Spot
 
 ## Pass criteria
 
-All four Terraform states have no managed resources or locks. Direct and tag-based checks find no active run-owned regional resource, IAM resource, OIDC provider, runtime secret, CloudWatch group, KMS alias, or Karpenter artifact. Every run-tagged ARN is a failure unless it is the separately validated expected KMS key or one of the exact runtime secrets checked below.
+All five Terraform states have no managed resources or locks. Direct and tag-based checks find no active run-owned regional resource, IAM resource, OIDC provider, runtime secret, CloudWatch group, KMS alias, or Karpenter artifact. Every run-tagged ARN is a failure unless it is the separately validated expected KMS key or one of the exact runtime secrets checked below.
 
 The expected scheduled remnant is the EKS customer-managed KMS key and, when Lore acceptance is enabled, the separate Lore storage key. Require matching run-manifest cleanup markers, `KeyState=PendingDeletion`, `Enabled=false`, deletion dates, and no aliases targeting either key. The EKS key can use an exact run ownership tag only for manual recovery without a manifest. A manifest-linked key that returns `NotFoundException` is fully deleted and is also terminal; a direct key ID returning not found cannot prove ownership. An unrelated key is never acceptable evidence. An enabled key, surviving alias, missing run-linked evidence, or any other active resource fails the audit. Record both key IDs and deletion dates in the test report.

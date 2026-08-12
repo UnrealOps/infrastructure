@@ -20,10 +20,17 @@ configured separately in the add-ons root and fulfilled by Karpenter.
 Run commands from the repository root:
 
 ```bash
+cp terraform/examples/account-bootstrap/terraform.tfvars.example terraform/examples/account-bootstrap/terraform.tfvars
+make account-bootstrap-init ENGINE=tofu
+tofu -chdir=terraform/examples/account-bootstrap plan -out=tfplan
+tofu -chdir=terraform/examples/account-bootstrap apply tfplan
+tofu -chdir=terraform/examples/account-bootstrap output admin_principal_arns
+
 make vpn-pki-init ENV=studio-dev AWS_REGION=us-west-2
 make lore-pki-init CLUSTER_NAME=studio-dev AWS_REGION=us-west-2
 cp terraform/examples/complete/foundation/terraform.tfvars.example terraform/examples/complete/foundation/terraform.tfvars
-# Set openvpn_runtime_secret_arn and durable admin_principal_arns in terraform.tfvars.
+# Set openvpn_runtime_secret_arn and copy the account-bootstrap
+# admin_principal_arns output into terraform.tfvars.
 make foundation-init ENGINE=tofu
 tofu -chdir=terraform/examples/complete/foundation plan
 tofu -chdir=terraform/examples/complete/foundation apply
@@ -35,10 +42,17 @@ deterministic `unrealops/studio-dev/lore/runtime` secret without exposing
 certificate material to Terraform state. The encrypted Lore CA remains under
 `~/.config/unrealops/lore-pki/studio-dev` and is separate from the OpenVPN CA.
 
+The account-bootstrap root creates a durable IAM role that can discover the
+named EKS cluster. This foundation grants that role Kubernetes administrator
+access through an EKS access entry. Keep the bootstrap state separate from this
+root and verify access through the role before setting
+`enable_cluster_creator_admin_permissions = false`.
+
 Connect with the generated profile before applying `../addons` with `cluster_name` set to this root's `name`. The add-ons root discovers the cluster from AWS; it does not read this root's Terraform state. To tear down the environment, destroy add-ons while the VPN and private API are reachable, then destroy this foundation. Never destroy the foundation first.
 
 The commands above use local state and are intended for evaluation. Durable
-environments require distinct encrypted, locked remote state for both roots.
+environments require distinct encrypted, locked remote state for account
+bootstrap, foundation, and add-ons.
 Follow `$deploy-unrealops-infrastructure`; its
 `.agents/skills/deploy-unrealops-infrastructure/scripts/init-backend.sh` helper
 initializes this root from a credential-free backend config stored outside the

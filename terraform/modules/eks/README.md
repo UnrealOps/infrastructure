@@ -72,4 +72,4 @@ The initial `v0.1.0` interface does not accept `cluster_version`,
 add-on version overrides are not supported; upgrade the repository release to
 adopt a newly tested version set.
 
-The Terraform caller receives temporary cluster-admin access by default for turn-key bootstrapping. Add a durable administrative access entry, then set `enable_cluster_creator_admin_permissions = false` for long-lived environments. Enable `deletion_protection` outside ephemeral test environments.
+The Terraform caller receives temporary cluster-admin access by default for turn-key bootstrapping. For the complete workflow, create the durable role with [`../account-bootstrap`](../account-bootstrap), pass its ARN through the foundation's `admin_principal_arns`, verify Kubernetes access while connected through OpenVPN, and then set `enable_cluster_creator_admin_permissions = false`. Enable `deletion_protection` outside ephemeral test environments.

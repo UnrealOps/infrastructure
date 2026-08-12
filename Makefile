@@ -10,6 +10,7 @@ LORE_SECRET_NAME ?= unrealops/$(CLUSTER_NAME)/lore/runtime
 LORE_CA_OUTPUT ?= $(CLUSTER_NAME)-lore-ca.crt
 
 SUPPORTED_DIRS := \
+	terraform/modules/account-bootstrap \
 	terraform/modules/network \
 	terraform/modules/openvpn \
 	terraform/modules/eks \
@@ -18,6 +19,7 @@ SUPPORTED_DIRS := \
 	terraform/modules/cluster-addons \
 	terraform/modules/lore-infra \
 	terraform/modules/lore-workload \
+	terraform/examples/account-bootstrap \
 	terraform/examples/complete/foundation \
 	terraform/examples/complete/addons
 
@@ -25,7 +27,7 @@ TRIVY_SKIP_DIRS := \
 	--tf-exclude-downloaded-modules \
 	--skip-dirs '**/.terraform'
 
-.PHONY: fmt fmt-check validate lint security test check test-live foundation-init addons-init vpn-pki-init vpn-client vpn-revoke lore-pki-init lore-pki-rotate lore-ca
+.PHONY: fmt fmt-check validate lint security test check test-live account-bootstrap-init foundation-init addons-init vpn-pki-init vpn-client vpn-revoke lore-pki-init lore-pki-rotate lore-ca
 
 fmt:
 	@for dir in $(SUPPORTED_DIRS); do [ ! -d "$$dir" ] || $(ENGINE) fmt "$$dir"; done
@@ -55,11 +57,13 @@ test-live:
 	@test "$(TF_ACC)" = "1" || { echo "Set TF_ACC=1 to authorize billable AWS tests" >&2; exit 1; }
 	@set -e; cleanup() { \
 		for dir in \
+			terraform/examples/account-bootstrap \
 			terraform/examples/complete/foundation \
 			terraform/examples/complete/addons \
 			terraform/modules/cluster-addons-infra \
 			terraform/modules/lore-infra \
 			terraform/modules/lore-workload \
+			terraform/tests/fixtures/account-bootstrap \
 			terraform/tests/fixtures/network \
 			terraform/tests/fixtures/openvpn; do \
 			rm -rf "$$dir/.terraform"; \
@@ -67,6 +71,11 @@ test-live:
 		done; \
 	}; trap cleanup EXIT; cleanup; \
 	TF_ACC=1 TERRAFORM_BINARY=$(ENGINE) go test ./terraform/tests -count=1 -p 1 -parallel 1 -v -timeout 0
+
+account-bootstrap-init:
+	rm -rf terraform/examples/account-bootstrap/.terraform
+	rm -f terraform/examples/account-bootstrap/.terraform.lock.hcl
+	$(ENGINE) -chdir=terraform/examples/account-bootstrap init
 
 foundation-init:
 	rm -rf terraform/examples/complete/foundation/.terraform

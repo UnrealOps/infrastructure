@@ -82,6 +82,7 @@ command -v aws >/dev/null 2>&1 || die "aws is required"
 command -v jq >/dev/null 2>&1 || die "jq is required"
 
 e2e="unrealops-e2e-$run_id"
+bootstrap="unrealops-bootstrap-$run_id"
 network="unrealops-network-$run_id"
 vpn="unrealops-vpn-$run_id"
 
@@ -91,10 +92,12 @@ if [[ -n "$manifest_path" ]]; then
 	manifest_region="$(jq -er '.region' "$manifest_path")" || die "manifest is missing region"
 	manifest_run_id="$(jq -er '.run_id' "$manifest_path")" || die "manifest is missing run_id"
 	manifest_e2e="$(jq -er '.names.e2e' "$manifest_path")" || die "manifest is missing names.e2e"
+	manifest_bootstrap="$(jq -r '.names.bootstrap // empty' "$manifest_path")" || die "could not parse names.bootstrap"
 	[[ "$manifest_account" == "$account_id" ]] || die "manifest account does not match --account-id"
 	[[ "$manifest_region" == "$region" ]] || die "manifest region does not match --region"
 	[[ "$manifest_run_id" == "$run_id" ]] || die "manifest run_id does not match --run-id"
 	[[ "$manifest_e2e" == "$e2e" ]] || die "manifest EKS owner does not match this run"
+	[[ -z "$manifest_bootstrap" || "$manifest_bootstrap" == "$bootstrap" ]] || die "manifest account-bootstrap owner does not match this run"
 	manifest_lore_image="$(jq -r '.lore_image // empty' "$manifest_path")" ||
 		die "could not parse Lore acceptance marker"
 	if [[ -n "$manifest_lore_image" ]]; then
@@ -174,11 +177,13 @@ fi
 state_roots=(
 	terraform/examples/complete/foundation
 	terraform/examples/complete/addons
+	terraform/tests/fixtures/account-bootstrap
 	terraform/tests/fixtures/openvpn
 	terraform/tests/fixtures/network
 )
 selectors=(
 	"Environment=$e2e"
+	"Test=$bootstrap"
 	"Test=$network"
 	"Test=$vpn"
 	"ClusterName=$e2e"
@@ -205,11 +210,11 @@ record_output() {
 }
 
 has_ownership_tag() {
-	jq -e --arg e2e "$e2e" --arg network "$network" --arg vpn "$vpn" '
+	jq -e --arg e2e "$e2e" --arg bootstrap "$bootstrap" --arg network "$network" --arg vpn "$vpn" '
     (
       any(.Tags[]?;
         (.Key == "Environment" and .Value == $e2e) or
-        (.Key == "Test" and (.Value == $network or .Value == $vpn)) or
+        (.Key == "Test" and (.Value == $bootstrap or .Value == $network or .Value == $vpn)) or
         (.Key == "ClusterName" and .Value == $e2e) or
         (.Key == "karpenter.sh/discovery" and .Value == $e2e) or
         (.Key == "eks:cluster-name" and .Value == $e2e) or
@@ -220,6 +225,7 @@ has_ownership_tag() {
       )
     ) or (
       .tags.Environment? == $e2e or
+      .tags.Test? == $bootstrap or
       .tags.Test? == $network or
       .tags.Test? == $vpn or
       .tags.ClusterName? == $e2e or
@@ -527,6 +533,7 @@ is_expected_role_name() {
 is_exact_run_prefixed_iam_name() {
 	local name="$1"
 	[[ "$name" == "$e2e-"* ||
+		"$name" == "$bootstrap" ||
 		"$name" == "$network-"* ||
 		"$name" == "$vpn-"* ]]
 }
@@ -638,6 +645,7 @@ audit_once() {
 		check_tagged_resources "$selector"
 	done
 	check_ec2_owner Environment "$e2e"
+	check_ec2_owner Test "$bootstrap"
 	check_ec2_owner Test "$network"
 	check_ec2_owner Test "$vpn"
 	check_ec2_owner karpenter.sh/discovery "$e2e"

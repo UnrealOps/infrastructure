@@ -49,12 +49,18 @@ workloads.
 
 ## 🏗️ Architecture
 
-Deployment is split into two roots because Kubernetes and Helm providers cannot
-reach the private EKS API until the operator connects through OpenVPN.
+Cluster deployment is split into two roots because Kubernetes and Helm
+providers cannot reach the private EKS API until the operator connects through
+OpenVPN. A third, account-level bootstrap root owns the durable IAM role used to
+administer the cluster and intentionally has an independent lifecycle.
 
 ```mermaid
 flowchart LR
-    Operator["Studio operator"] --> Foundation["Foundation root"]
+    BootstrapIdentity["Existing bootstrap identity"] --> AccountBootstrap["Account bootstrap root"]
+    AccountBootstrap --> AdminRole["Durable EKS administrator role"]
+    Operator["Studio operator"] -->|Assume| AdminRole
+    Operator --> Foundation["Foundation root"]
+    AdminRole -->|EKS access entry| EKS
     Foundation --> Network["Network"]
     Foundation --> VPN["OpenVPN"]
     Foundation --> EKS["Private EKS"]
@@ -68,10 +74,12 @@ flowchart LR
     LoreAWS --> EKS
 ```
 
-Apply `terraform/examples/complete/foundation` first. After connecting through
-OpenVPN, apply `terraform/examples/complete/addons` with the same cluster name.
-The add-ons root discovers the cluster and Karpenter prerequisites from AWS; it
-does not read foundation Terraform state.
+Apply `terraform/examples/account-bootstrap`, copy its
+`admin_principal_arns` output into the foundation, and then apply
+`terraform/examples/complete/foundation`. After connecting through OpenVPN,
+apply `terraform/examples/complete/addons` with the same cluster name. The
+add-ons root discovers the cluster and Karpenter prerequisites from AWS; it does
+not read foundation Terraform state.
 
 ## ⚡ Quickstart
 
@@ -87,13 +95,30 @@ SHA-256 utility.
 > CloudWatch, KMS, and Secrets Manager resources. Review every plan and destroy
 > evaluation environments promptly.
 
-### 1. Prepare the environment
+### 1. Bootstrap durable administrator access
 
 ```bash
 git clone https://github.com/UnrealOps/infrastructure.git
 cd infrastructure
 
 aws sts get-caller-identity --region us-west-2
+cp terraform/examples/account-bootstrap/terraform.tfvars.example \
+  terraform/examples/account-bootstrap/terraform.tfvars
+# Edit aws_region, cluster_names, and trusted_principal_arns before continuing.
+make account-bootstrap-init ENGINE=tofu
+tofu -chdir=terraform/examples/account-bootstrap plan -out=tfplan
+tofu -chdir=terraform/examples/account-bootstrap apply tfplan
+tofu -chdir=terraform/examples/account-bootstrap output admin_principal_arns
+```
+
+Review the trusted permanent IAM principal in the saved plan, then copy the
+`admin_principal_arns` output into the foundation variables. The bootstrap role
+has EKS discovery permissions only; the foundation grants Kubernetes
+administrator access through an EKS access entry.
+
+### 2. Prepare the cluster environment
+
+```bash
 cp terraform/examples/complete/foundation/terraform.tfvars.example \
   terraform/examples/complete/foundation/terraform.tfvars
 cp terraform/examples/complete/addons/terraform.tfvars.example \
@@ -105,7 +130,7 @@ make vpn-pki-init ENV=studio-dev AWS_REGION=us-west-2
 Add the returned runtime secret ARN and durable administrator principals to
 `terraform/examples/complete/foundation/terraform.tfvars`.
 
-### 2. Apply the foundation
+### 3. Apply the foundation
 
 ```bash
 make foundation-init ENGINE=tofu
@@ -130,7 +155,7 @@ These commands use local state for evaluation. Use the
 runbook to configure separate encrypted and locked remote state for durable
 environments.
 
-### 3. Destroy in dependency order
+### 4. Destroy in dependency order
 
 Remain connected to OpenVPN while destroying the add-ons:
 
@@ -140,12 +165,15 @@ tofu -chdir=terraform/examples/complete/foundation destroy
 ```
 
 The runtime secret and offline certificate authority are intentionally outside
-these Terraform roots. Retire them separately according to studio policy.
+these Terraform roots. Retire them separately according to studio policy. Keep
+the account-bootstrap role and its state while any cluster still references it;
+remove EKS access entries before intentionally destroying that role.
 
 ## 🧩 Supported Modules
 
 | Module | Purpose |
 | --- | --- |
+| [`account-bootstrap`](terraform/modules/account-bootstrap) | Durable, assumable IAM role for human EKS administration with least-privilege cluster discovery |
 | [`network`](terraform/modules/network) | Three-AZ VPC, private EKS subnets, per-AZ NAT, VPN subnets, flow logs, and S3/DynamoDB gateway endpoints |
 | [`openvpn`](terraform/modules/openvpn) | Self-healing OpenVPN Community instance with a stable Elastic IP and offline CA workflow |
 | [`eks`](terraform/modules/eks) | Private EKS control plane, managed add-ons, encryption, access entries, and AL2023 system nodes |
@@ -170,6 +198,7 @@ Lore remains disabled unless both roots set `enable_lore = true`.
 
 ## 📚 Documentation and Tutorials
 
+- [Account bootstrap example](terraform/examples/account-bootstrap)
 - [Complete foundation example](terraform/examples/complete/foundation)
 - [Complete add-ons example](terraform/examples/complete/addons)
 - [Lore private EKS deployment](docs/lore-deployment.md)

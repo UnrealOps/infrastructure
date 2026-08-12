@@ -12,7 +12,8 @@ system_node_group_size = {
 }
 
 admin_principal_arns = [
-  "arn:aws:iam::123456789012:role/StudioInfrastructureAdministrators",
+  # Output by terraform/examples/account-bootstrap.
+  "arn:aws:iam::123456789012:role/unrealops/StudioEKSAdministrators",
 ]
 
 # Restrict this when employees connect from stable public networks.
