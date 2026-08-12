@@ -53,6 +53,11 @@ output "cluster_endpoint" {
   value       = module.eks.cluster_endpoint
 }
 
+output "admin_principal_arns" {
+  description = "Durable IAM principals configured as EKS cluster administrators."
+  value       = var.admin_principal_arns
+}
+
 output "cluster_certificate_authority_data" {
   description = "Base64-encoded EKS cluster CA for operator tooling. The add-ons root discovers this from AWS via data.aws_eks_cluster."
   value       = module.eks.cluster_certificate_authority_data

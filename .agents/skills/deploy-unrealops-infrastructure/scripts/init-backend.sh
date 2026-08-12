@@ -8,15 +8,16 @@ usage() {
 Initialize one supported UnrealOps root with a durable remote backend.
 
 Usage:
-  init-backend.sh --root foundation|addons --engine tofu|terraform \
+  init-backend.sh --root account-bootstrap|foundation|addons --engine tofu|terraform \
     --backend-type s3 --backend-config /absolute/path/to/root.s3.tfbackend \
-    --peer-backend-config /absolute/path/to/other-root.s3.tfbackend \
+    --peer-backend-config /absolute/path/to/other-root.s3.tfbackend [...] \
     --environment NAME \
     (--allow-new-state | --expected-lineage UUID)
 
-Both backend configs must be credential-free, private regular files outside the
-repository and must select distinct S3 bucket/key pairs. Existing state must
-match its retained lineage; --allow-new-state refuses any existing state.
+All backend configs must be credential-free, private regular files outside the
+repository and must select distinct S3 bucket/key pairs. Repeat
+--peer-backend-config for every other root. Existing state must match its
+retained lineage; --allow-new-state refuses any existing state.
 EOF
 }
 
@@ -85,7 +86,7 @@ root_name=""
 engine=""
 backend_type=""
 backend_config=""
-peer_backend_config=""
+peer_backend_configs=()
 environment=""
 expected_lineage=""
 allow_new_state=false
@@ -114,7 +115,7 @@ while (($#)); do
       ;;
     --peer-backend-config)
       (($# >= 2)) || die "$1 requires a value"
-      peer_backend_config="$2"
+      peer_backend_configs+=("$2")
       shift 2
       ;;
     --environment)
@@ -140,8 +141,8 @@ while (($#)); do
 done
 
 case "$root_name" in
-  foundation | addons) ;;
-  *) die "--root must be foundation or addons" ;;
+  account-bootstrap | foundation | addons) ;;
+  *) die "--root must be account-bootstrap, foundation, or addons" ;;
 esac
 case "$engine" in
   tofu | terraform) ;;
@@ -162,20 +163,32 @@ command -v jq >/dev/null 2>&1 || die "jq is required"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd "$script_dir/../../../.." && pwd -P)"
 backend_config="$(validate_backend_config "$backend_config" "--backend-config")"
-peer_backend_config="$(validate_backend_config \
-  "$peer_backend_config" "--peer-backend-config")"
+[[ ${#peer_backend_configs[@]} -gt 0 ]] ||
+  die "supply at least one --peer-backend-config"
 
 backend_bucket="$(backend_string_value "$backend_config" bucket)"
 backend_key="$(backend_string_value "$backend_config" key)"
 backend_string_value "$backend_config" region >/dev/null
-peer_backend_bucket="$(backend_string_value "$peer_backend_config" bucket)"
-peer_backend_key="$(backend_string_value "$peer_backend_config" key)"
-backend_string_value "$peer_backend_config" region >/dev/null
-if [[ "$backend_bucket" == "$peer_backend_bucket" && "$backend_key" == "$peer_backend_key" ]]; then
-  die "foundation and add-ons backend configs must select distinct S3 bucket/key pairs"
-fi
+backend_pairs=("$backend_bucket/$backend_key")
+for peer_index in "${!peer_backend_configs[@]}"; do
+  peer_backend_configs[peer_index]="$(validate_backend_config \
+    "${peer_backend_configs[peer_index]}" "--peer-backend-config")"
+  peer_backend_bucket="$(backend_string_value "${peer_backend_configs[peer_index]}" bucket)"
+  peer_backend_key="$(backend_string_value "${peer_backend_configs[peer_index]}" key)"
+  backend_string_value "${peer_backend_configs[peer_index]}" region >/dev/null
+  peer_backend_pair="$peer_backend_bucket/$peer_backend_key"
+  for backend_pair in "${backend_pairs[@]}"; do
+    [[ "$backend_pair" != "$peer_backend_pair" ]] ||
+      die "root and peer backend configs must select distinct S3 bucket/key pairs"
+  done
+  backend_pairs+=("$peer_backend_pair")
+done
 
-root_relative="terraform/examples/complete/$root_name"
+if [[ "$root_name" == "account-bootstrap" ]]; then
+  root_relative="terraform/examples/account-bootstrap"
+else
+  root_relative="terraform/examples/complete/$root_name"
+fi
 root_directory="$repo_root/$root_relative"
 backend_override="$root_directory/backend_override.tf"
 temporary_override="$(mktemp "$root_directory/.backend_override.tf.XXXXXX")"
@@ -227,7 +240,26 @@ if state_output="$("$engine" -chdir="$root_directory" state pull 2>"$state_error
 
   managed_count="$(jq '[.resources[]? | select(.mode == "managed")] | length' \
     <<<"$state_output")"
-  if [[ "$root_name" == "foundation" ]]; then
+  if [[ "$root_name" == "account-bootstrap" ]]; then
+    role_arn="$(jq -r '.outputs.eks_admin_role_arn.value // empty' <<<"$state_output")"
+    cluster_matches_environment="$(jq -r --arg environment "$environment" '
+      any((.outputs.cluster_arns.value // [])[]?; endswith(":cluster/" + $environment))
+    ' <<<"$state_output")"
+    if ((managed_count > 0)); then
+      [[ "$role_arn" == arn:*:iam::*:role/* ]] ||
+        die "non-empty account-bootstrap state lacks a durable IAM role ARN"
+      [[ "$cluster_matches_environment" == "true" ]] ||
+        die "non-empty account-bootstrap state does not include cluster $environment"
+    fi
+    jq -e '
+      [
+        .resources[]?
+        | select(.mode == "managed")
+        | select(.type != "aws_iam_role" and .type != "aws_iam_role_policy")
+      ] | length == 0
+    ' <<<"$state_output" >/dev/null ||
+      die "account-bootstrap state contains resources outside its IAM role boundary"
+  elif [[ "$root_name" == "foundation" ]]; then
     cluster_name="$(jq -r '.outputs.cluster_name.value // empty' <<<"$state_output")"
     [[ -z "$cluster_name" || "$cluster_name" == "$environment" ]] ||
       die "foundation state cluster $cluster_name does not match environment $environment"

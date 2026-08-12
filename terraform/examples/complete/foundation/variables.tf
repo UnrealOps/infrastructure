@@ -99,9 +99,19 @@ variable "openvpn_route53_record_name" {
 }
 
 variable "admin_principal_arns" {
-  description = "IAM role or user ARNs granted the AmazonEKSClusterAdminPolicy through access entries."
+  description = "Exact, permanent IAM role or user ARNs granted AmazonEKSClusterAdminPolicy through access entries. Prefer the account-bootstrap role output."
   type        = set(string)
   default     = []
+
+  validation {
+    condition = alltrue([
+      for arn in var.admin_principal_arns : can(regex(
+        "^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:(role|user)/[A-Za-z0-9+=,.@_/-]+$",
+        arn
+      ))
+    ])
+    error_message = "admin_principal_arns must contain only exact, permanent IAM role or user ARNs; STS session ARNs are invalid EKS access-entry principals."
+  }
 }
 
 variable "enable_cluster_creator_admin_permissions" {

@@ -2,17 +2,17 @@
 
 ## Scope and prerequisites
 
-This repository supports only `network`, `openvpn`, `eks`, `karpenter-infra`, and `cluster-addons`. Do not extend or deploy archived stacks.
+This repository supports only `account-bootstrap`, `network`, `openvpn`, `eks`, `karpenter-infra`, and `cluster-addons`, plus the opt-in Lore extension. Do not extend or deploy archived stacks.
 
 Install OpenTofu or Terraform within the roots' declared version constraint, plus AWS CLI v2, kubectl, OpenVPN, Go, `curl`, `jq`, OpenSSL, `tar`, and `sha256sum` or `shasum`. Homebrew may install OpenVPN in `/usr/local/sbin` or `/opt/homebrew/sbin`; add that directory to `PATH`.
 
 Durable environments require all of the following:
 
-- Separate encrypted, locked remote state for the foundation and add-ons roots.
+- Separate encrypted, locked remote state for the account-bootstrap, foundation, and add-ons roots.
 - `deletion_protection = true`.
 - A user-confirmed unique lowercase environment name and non-overlapping VPC CIDR.
 - Restricted `openvpn_ingress_cidrs` when operators have stable source addresses.
-- At least one durable `admin_principal_arns` entry.
+- At least one durable `admin_principal_arns` entry produced by account bootstrap or an equivalently managed external IAM role.
 - An approved encrypted operations store for the inputs and recovery metadata listed under [Retain the durable handoff](#retain-the-durable-handoff).
 
 The checked-in local-state configuration is only for evaluation and acceptance testing.
@@ -133,13 +133,23 @@ validate_addons_plan() {
 
 Confirm at least three available AZs and sufficient quota for three NAT gateways, four EIPs, one EKS cluster, the OpenVPN instance, the configured system-node maximum plus replacement headroom, VPCs, KMS keys, and IAM resources. The system-node default is two `m6i.large` instances with `min = 2`, `desired = 2`, and `max = 3`, allowing default controller replicas to remain separated. This release was acceptance-tested in `us-west-2`; validate all pinned EKS, AMI, add-on, and Karpenter versions before using another region. Repository releases own those private source constants.
 
-Before planning, obtain these choices rather than inventing them: environment name, VPC CIDR, VPN ingress CIDRs, administrator ARNs, runtime secret ARN or plan-only placeholder, deletion protection, tags, and both state backends. Inspect any existing state and confirm its lineage and environment with the operator.
+Before planning, obtain these choices rather than inventing them: environment name, VPC CIDR, VPN ingress CIDRs, the permanent IAM principals trusted to assume the administrator role, runtime secret ARN or plan-only placeholder, deletion protection, tags, and all three state backends. Inspect any existing state and confirm its lineage and environment with the operator.
 
 ## Configure durable state
 
 Backend credentials must come from the normal AWS credential chain. Never place access keys, secret keys, session tokens, or other credentials in backend files, tfvars, shell arguments, or the repository.
 
-Store two backend config files outside the repository in the studio's approved encrypted operations store. They must select different state keys. For example, an S3 foundation file may contain:
+Store three backend config files outside the repository in the studio's approved encrypted operations store. They must select different state keys. For example, an S3 account-bootstrap file may contain:
+
+```hcl
+bucket       = "studio-terraform-state"
+key          = "unrealops/account-bootstrap.tfstate"
+region       = "REPLACE_WITH_CONFIRMED_REGION"
+encrypt      = true
+use_lockfile = true
+```
+
+The foundation file uses its own key:
 
 ```hcl
 bucket       = "studio-terraform-state"
@@ -163,13 +173,70 @@ Require bucket versioning and a policy that restricts state access. Then export 
 
 ```bash
 export BACKEND_TYPE=s3
+export ACCOUNT_BOOTSTRAP_BACKEND_CONFIG=/secure/operations/unrealops-account-bootstrap.s3.tfbackend
 export FOUNDATION_BACKEND_CONFIG=/secure/operations/unrealops-foundation.s3.tfbackend
 export ADDONS_BACKEND_CONFIG=/secure/operations/unrealops-addons.s3.tfbackend
 
-chmod 600 "$FOUNDATION_BACKEND_CONFIG" "$ADDONS_BACKEND_CONFIG"
+chmod 600 "$ACCOUNT_BOOTSTRAP_BACKEND_CONFIG" "$FOUNDATION_BACKEND_CONFIG" "$ADDONS_BACKEND_CONFIG"
 ```
 
-Initialize the foundation with its external backend config. Dependency lockfiles are generated locally and ignored:
+Initialize account bootstrap first. Dependency lockfiles are generated locally and ignored:
+
+```bash
+ACCOUNT_BOOTSTRAP_STATE_PROVENANCE_ARGS=()
+if [[ -n "${EXPECTED_ACCOUNT_BOOTSTRAP_STATE_LINEAGE:-}" ]]; then
+  ACCOUNT_BOOTSTRAP_STATE_PROVENANCE_ARGS=(
+    --expected-lineage "$EXPECTED_ACCOUNT_BOOTSTRAP_STATE_LINEAGE"
+  )
+elif [[ "${CONFIRM_NEW_ACCOUNT_BOOTSTRAP_STATE:-}" == "yes" ]]; then
+  ACCOUNT_BOOTSTRAP_STATE_PROVENANCE_ARGS=(--allow-new-state)
+else
+  printf '%s\n' \
+    'Recover EXPECTED_ACCOUNT_BOOTSTRAP_STATE_LINEAGE or set CONFIRM_NEW_ACCOUNT_BOOTSTRAP_STATE=yes after confirming this is a new access boundary.' >&2
+  false
+fi
+
+.agents/skills/deploy-unrealops-infrastructure/scripts/init-backend.sh \
+  --root account-bootstrap \
+  --engine "$ENGINE" \
+  --backend-type "$BACKEND_TYPE" \
+  --backend-config "$ACCOUNT_BOOTSTRAP_BACKEND_CONFIG" \
+  --peer-backend-config "$FOUNDATION_BACKEND_CONFIG" \
+  --peer-backend-config "$ADDONS_BACKEND_CONFIG" \
+  --environment "$ENVIRONMENT" \
+  "${ACCOUNT_BOOTSTRAP_STATE_PROVENANCE_ARGS[@]}"
+```
+
+## Bootstrap durable EKS administrator identity
+
+Copy `terraform/examples/account-bootstrap/terraform.tfvars.example`, set
+`cluster_names = [ENVIRONMENT]`, and name the exact permanent IAM user or role
+ARNs that may assume the role. Prefer an IAM Identity Center permission-set role.
+An empty trust list resolves to the permanent issuer behind the applying
+session; confirm that resolved ARN in the saved plan. With explicit
+authorization to change IAM, save, inspect, and apply the bootstrap plan:
+
+```bash
+ACCOUNT_BOOTSTRAP_TFVARS=terraform/examples/account-bootstrap/terraform.tfvars
+test -e "$ACCOUNT_BOOTSTRAP_TFVARS" ||
+  cp terraform/examples/account-bootstrap/terraform.tfvars.example "$ACCOUNT_BOOTSTRAP_TFVARS"
+
+ACCOUNT_BOOTSTRAP_PLAN=terraform/examples/account-bootstrap/account-bootstrap.tfplan
+rm -f "$ACCOUNT_BOOTSTRAP_PLAN"
+assert_account
+"$ENGINE" -chdir=terraform/examples/account-bootstrap plan -out=account-bootstrap.tfplan
+"$ENGINE" -chdir=terraform/examples/account-bootstrap show account-bootstrap.tfplan
+assert_account
+"$ENGINE" -chdir=terraform/examples/account-bootstrap apply account-bootstrap.tfplan
+"$ENGINE" -chdir=terraform/examples/account-bootstrap output admin_principal_arns
+```
+
+Copy that output into the foundation's `admin_principal_arns`. The role is not
+an infrastructure deployment role: its AWS policy only lists clusters and
+describes the named clusters, while the foundation grants Kubernetes authority
+through an EKS access entry.
+
+Then initialize the foundation with its external backend config:
 
 ```bash
 FOUNDATION_STATE_PROVENANCE_ARGS=()
@@ -190,12 +257,13 @@ fi
   --engine "$ENGINE" \
   --backend-type "$BACKEND_TYPE" \
   --backend-config "$FOUNDATION_BACKEND_CONFIG" \
+  --peer-backend-config "$ACCOUNT_BOOTSTRAP_BACKEND_CONFIG" \
   --peer-backend-config "$ADDONS_BACKEND_CONFIG" \
   --environment "$ENVIRONMENT" \
   "${FOUNDATION_STATE_PROVENANCE_ARGS[@]}"
 ```
 
-The helper creates only an ignored `backend_override.tf`; it refuses backend config files inside the repository, files readable by group or other users, raw AWS credentials, unresolved placeholders, a shared foundation/add-ons bucket-key pair, and unexpected existing override files. It also refuses any existing state unless its retained lineage is supplied, and requires a non-empty foundation state to expose `cluster_name = ENVIRONMENT`. Do not migrate, replace, or adopt a lineage merely to bypass that check.
+The helper creates only an ignored `backend_override.tf`; it refuses backend config files inside the repository, files readable by group or other users, raw AWS credentials, unresolved placeholders, duplicate root/peer bucket-key pairs, and unexpected existing override files. It also refuses any existing state unless its retained lineage is supplied, validates the account-bootstrap IAM-only boundary, and requires a non-empty foundation state to expose `cluster_name = ENVIRONMENT`. Do not migrate, replace, or adopt a lineage merely to bypass that check.
 
 ## Plan without creating resources
 
@@ -276,6 +344,7 @@ Re-run the backend helper if this is a new checkout, then save and inspect a fre
   --engine "$ENGINE" \
   --backend-type "$BACKEND_TYPE" \
   --backend-config "$FOUNDATION_BACKEND_CONFIG" \
+  --peer-backend-config "$ACCOUNT_BOOTSTRAP_BACKEND_CONFIG" \
   --peer-backend-config "$ADDONS_BACKEND_CONFIG" \
   --environment "$ENVIRONMENT" \
   "${FOUNDATION_STATE_PROVENANCE_ARGS[@]}" &&
@@ -467,7 +536,7 @@ assert_durable_admin_identity "$DURABLE_ADMIN_PRINCIPALS" &&
 
 Do not proceed if durable access is lost or the lineage cannot be read.
 
-Switch the deployment shell to that validated durable-administrator AWS session before continuing, and set `KUBECONFIG="$DURABLE_ADMIN_KUBECONFIG"`. The add-ons Kubernetes and Helm providers obtain their EKS token from the shell's AWS credential chain; the removed cluster-creator access must not be their credential source. Re-run `assert_account` after switching sessions. Confirm that this session can also read and lock both state objects before proceeding.
+Switch the deployment shell to that validated durable-administrator AWS session before continuing, and set `KUBECONFIG="$DURABLE_ADMIN_KUBECONFIG"`. The add-ons Kubernetes and Helm providers obtain their EKS token from the shell's AWS credential chain; the removed cluster-creator access must not be their credential source. Re-run `assert_account` after switching sessions. Confirm that this session can also read and lock the state objects needed for its work before proceeding; access to account-bootstrap state is not required for ordinary cluster administration.
 
 ## Deploy add-ons
 
@@ -513,6 +582,7 @@ fi
   --engine "$ENGINE" \
   --backend-type "$BACKEND_TYPE" \
   --backend-config "$ADDONS_BACKEND_CONFIG" \
+  --peer-backend-config "$ACCOUNT_BOOTSTRAP_BACKEND_CONFIG" \
   --peer-backend-config "$FOUNDATION_BACKEND_CONFIG" \
   --environment "$ENVIRONMENT" \
   "${ADDONS_STATE_PROVENANCE_ARGS[@]}" &&
@@ -759,9 +829,9 @@ YAML
 Before ending the deployment session, store the following in the studio's approved encrypted operations system:
 
 - Confirmed account, region, environment, engine, repository release tag, and commit.
-- Backend type and both external backend config files, with separate state keys and no credentials.
-- The exact foundation and add-ons state lineages captured after deployment.
-- The populated foundation and add-ons inputs, including the add-ons `cluster_name` (equal to the environment).
+- Backend type and all three external backend config files, with separate state keys and no credentials.
+- The exact account-bootstrap, foundation, and add-ons state lineages captured after deployment.
+- The populated account-bootstrap, foundation, and add-ons inputs, including the trusted permanent IAM principals and the add-ons `cluster_name` (equal to the environment).
 - Runtime secret ARN, its external encryption KMS key ARN when configured, offline PKI backup and recovery instructions, and client-revocation procedure.
 - Cluster name verified equal to the environment, VPC ID, KMS key ARN, and an explicit Route 53 decision: `OPENVPN_ROUTE53_CONFIGURED=yes` plus zone/record coordinates, or `OPENVPN_ROUTE53_CONFIGURED=no`.
 - Sanitized plan summaries, apply timestamps, durable administrator principals, and commands run.
@@ -790,6 +860,7 @@ When studio retention policy no longer requires the saved plans, remove exactly 
 
 ```bash
 rm -f -- \
+  terraform/examples/account-bootstrap/account-bootstrap.tfplan \
   terraform/examples/complete/foundation/foundation.tfplan \
   terraform/examples/complete/foundation/creator-admin-off.tfplan \
   terraform/examples/complete/foundation/deletion-protection-off.tfplan \
@@ -800,7 +871,7 @@ rm -f -- \
 
 ## Destroy
 
-Obtain explicit destroy authorization for the exact account, region, and environment. Recover the durable handoff, including both expected state lineages, then initialize both roots with their respective external backend files:
+Obtain explicit destroy authorization for the exact account, region, and environment. Recover the durable handoff, including the foundation and add-ons state lineages, then initialize those roots with their respective external backend files. Do not destroy account bootstrap as part of ordinary environment cleanup; retain its state and role until every referenced cluster access entry is removed and identity retirement is separately authorized.
 
 ```bash
 (
@@ -816,6 +887,7 @@ set -euo pipefail
   --engine "$ENGINE" \
   --backend-type "$BACKEND_TYPE" \
   --backend-config "$FOUNDATION_BACKEND_CONFIG" \
+  --peer-backend-config "$ACCOUNT_BOOTSTRAP_BACKEND_CONFIG" \
   --peer-backend-config "$ADDONS_BACKEND_CONFIG" \
   --environment "$ENVIRONMENT" \
   --expected-lineage "$EXPECTED_FOUNDATION_STATE_LINEAGE"
@@ -824,6 +896,7 @@ set -euo pipefail
   --engine "$ENGINE" \
   --backend-type "$BACKEND_TYPE" \
   --backend-config "$ADDONS_BACKEND_CONFIG" \
+  --peer-backend-config "$ACCOUNT_BOOTSTRAP_BACKEND_CONFIG" \
   --peer-backend-config "$FOUNDATION_BACKEND_CONFIG" \
   --environment "$ENVIRONMENT" \
   --expected-lineage "$EXPECTED_ADDONS_STATE_LINEAGE"
