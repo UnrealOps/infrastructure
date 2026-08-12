@@ -56,10 +56,10 @@ On macOS, add `--openvpn-connect-cli "/Applications/OpenVPN Connect/OpenVPN Conn
 ## Protect cleanup
 
 - Never default or infer the account or region. Compare STS with the supplied account before any mutation and pass the region to every AWS call.
-- Do not run concurrently. Terratest writes directly to four repository roots; use an isolated checkout or worktree. The wrapper refuses nonempty state, configured backends, overrides, local tfvars, non-default workspaces, cached nonlocal backend metadata, and inherited Terraform input/CLI controls.
+- Do not run concurrently. Terratest writes directly to five repository roots; use an isolated checkout or worktree. The wrapper refuses nonempty state, configured backends, overrides, local tfvars, non-default workspaces, cached nonlocal backend metadata, and inherited Terraform input/CLI controls.
 - Let `go test` finish after an assertion failure so deferred destroys can execute. Do not impose an external timeout.
 - Preserve state, test PKI, profiles, and runtime secrets after an interrupted or incomplete destroy. Replacement VPN instances may still require the secrets.
-- Destroy Karpenter workloads, add-ons, foundation, standalone OpenVPN, then standalone network. Delete external secrets only after all four states are empty and exact run-owned Auto Scaling groups and active EC2 instances are absent. Missing KMS evidence prevents a passing final audit, but must not retain secrets after those consumption checks prove them safe to remove.
+- Destroy Karpenter workloads, add-ons, foundation, standalone OpenVPN, standalone network, and the standalone account-bootstrap fixture. Delete external secrets only after all five states are empty and exact run-owned Auto Scaling groups and active EC2 instances are absent. Missing KMS evidence prevents a passing final audit, but must not retain secrets after those consumption checks prove them safe to remove.
 
 Always finish with the read-only audit, supplying exact nonstandard secret names or a captured KMS key when needed:
 

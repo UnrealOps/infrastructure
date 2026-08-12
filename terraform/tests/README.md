@@ -2,6 +2,8 @@
 
 With `TF_ACC` unset, `go test ./...` runs contract tests and skips live tests. Prefer the repository test skill for a billable run because it verifies the account, prepares isolated PKIs, serializes Terratest, preserves recovery material on failure, removes external secrets when safe, and performs an independent cleanup audit. Its wrapper requires AWS CLI v2, OpenTofu or Terraform, Go, kubectl, OpenVPN, GNU Make, TFLint, Trivy, `curl`, `jq`, OpenSSL, `tar`, and a SHA-256 utility:
 
+The live suite creates, assumes, verifies, and destroys a standalone account-bootstrap role before exercising the network and complete cluster stack. This proves the role trust and its least-privilege EKS discovery policy without changing the complete test's temporary creator-admin path.
+
 ```bash
 .agents/skills/test-unrealops-infrastructure/scripts/run-acceptance.sh \
   --engine tofu \

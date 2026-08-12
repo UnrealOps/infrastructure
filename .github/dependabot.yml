@@ -14,6 +14,11 @@ updates:
       interval: weekly
 
   - package-ecosystem: terraform
+    directory: /terraform/examples/account-bootstrap
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: terraform
     directory: /terraform/examples/complete/foundation
     schedule:
       interval: weekly

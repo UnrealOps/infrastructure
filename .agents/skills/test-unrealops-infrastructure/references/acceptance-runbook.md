@@ -3,6 +3,7 @@
 ## What the suite proves
 
 - `TestCompleteStack` deploys the full foundation, checks the pinned EKS/AMI/add-on set and private-only API, enters through a real OpenVPN tunnel, installs Karpenter, provisions a workload node, and waits for consolidation.
+- `TestAccountBootstrap` creates and assumes the durable administrator-role shape, verifies exact permanent trust, and proves its scoped EKS discovery policy.
 - With `--lore-image` and `--lore-client`, `TestCompleteStack` also enables the Lore foundation and add-ons, verifies ECR/S3/DynamoDB/Route 53 controls, validates private DNS and trusted TLS, exercises QUIC through the pinned Lore client, pushes and clones a binary tree, checks deduplicated S3 growth and shared locks, disrupts both workload tiers, verifies durable cache reconstruction, exercises S3 version recovery and DynamoDB PITR, and proves the default service account has no usable AWS workload credentials.
 - `TestNetwork` checks the three-AZ subnet layout, three NAT gateways, routing, and VPN prefix list.
 - `TestOpenVPNFailoverAndRevocation` checks TLS, IMDSv2, encrypted disk, no SSH ingress, SSM health, instance replacement, stable EIP recovery, CRL rejection, and a healthy control client.
@@ -29,6 +30,7 @@ The wrapper refuses a pre-existing Terraform state in:
 ```text
 terraform/examples/complete/foundation
 terraform/examples/complete/addons
+terraform/tests/fixtures/account-bootstrap
 terraform/tests/fixtures/network
 terraform/tests/fixtures/openvpn
 ```
@@ -81,7 +83,7 @@ The optional macOS fallback was validated with OpenVPN Connect 3.6.0 and accepts
 
 ## Failure handling
 
-An ordinary assertion failure still runs registered Terratest destroys. Wait for the process to exit. If it is interrupted or a destroy fails, preserve the work directory and all four states. The wrapper writes the account, region, engine, run ID, secret ARNs, and PKI root to `run-manifest.json`. As soon as the EKS key is observable, it also records a run-owned `cleanup_evidence.eks_kms_key` marker. Recover only from that manifest. If failure occurs before KMS evidence exists, the wrapper still removes the exact runtime secrets once all state, run-owned Auto Scaling groups, and active instances are proven absent; its audit continues but cannot pass without KMS cleanup evidence.
+An ordinary assertion failure still runs registered Terratest destroys. Wait for the process to exit. If it is interrupted or a destroy fails, preserve the work directory and all five states. The wrapper writes the account, region, engine, run ID, secret ARNs, and PKI root to `run-manifest.json`. As soon as the EKS key is observable, it also records a run-owned `cleanup_evidence.eks_kms_key` marker. Recover only from that manifest. If failure occurs before KMS evidence exists, the wrapper still removes the exact runtime secrets once all state, run-owned Auto Scaling groups, and active instances are proven absent; its audit continues but cannot pass without KMS cleanup evidence.
 
 ```bash
 set -euo pipefail
@@ -95,12 +97,15 @@ RUN_ID="$(jq -er .run_id "$MANIFEST")"
 SECRET_ARN="$(jq -er .secret_arn "$MANIFEST")"
 COMPLETE_SECRET_ARN="$(jq -er .complete_secret_arn "$MANIFEST")"
 export E2E_NAME="unrealops-e2e-$RUN_ID"
+export BOOTSTRAP_NAME="unrealops-bootstrap-$RUN_ID"
+export BOOTSTRAP_CLUSTER_NAME="unrealops-cluster-$RUN_ID"
 export VPN_NAME="unrealops-vpn-$RUN_ID"
 export NETWORK_NAME="unrealops-network-$RUN_ID"
 ROOT="$(pwd)"
 export ENGINE AWS_REGION EXPECTED_ACCOUNT_ID RUN_ID SECRET_ARN COMPLETE_SECRET_ARN ROOT
 export FOUNDATION=terraform/examples/complete/foundation
 export ADDONS=terraform/examples/complete/addons
+export BOOTSTRAP_FIXTURE=terraform/tests/fixtures/account-bootstrap
 export VPN_FIXTURE=terraform/tests/fixtures/openvpn
 export NETWORK_FIXTURE=terraform/tests/fixtures/network
 export AUDIT_SCRIPT=.agents/skills/test-unrealops-infrastructure/scripts/audit-acceptance-cleanup.sh
@@ -336,13 +341,21 @@ if test "$(managed_resource_count "$NETWORK_FIXTURE")" != 0; then
   "$ENGINE" -chdir="$NETWORK_FIXTURE" destroy -input=false -auto-approve \
     -var="region=$AWS_REGION" -var="name=$NETWORK_NAME"
 fi
+
+if test "$(managed_resource_count "$BOOTSTRAP_FIXTURE")" != 0; then
+  assert_account_scope
+  "$ENGINE" -chdir="$BOOTSTRAP_FIXTURE" init -input=false
+  "$ENGINE" -chdir="$BOOTSTRAP_FIXTURE" destroy -input=false -auto-approve \
+    -var="region=$AWS_REGION" -var="name=$BOOTSTRAP_NAME" \
+    -var="cluster_name=$BOOTSTRAP_CLUSTER_NAME"
+fi
 ```
 
 If any destroy remains incomplete, skip secret deletion, run a zero-wait read-only audit immediately, and preserve its findings with the state and PKI. The audit is expected to report the still-active runtime secrets as well as any infrastructure remnants.
 
 ```bash
 DESTROYS_COMPLETE=true
-for STATE_ROOT in "$FOUNDATION" "$ADDONS" "$VPN_FIXTURE" "$NETWORK_FIXTURE"; do
+for STATE_ROOT in "$FOUNDATION" "$ADDONS" "$BOOTSTRAP_FIXTURE" "$VPN_FIXTURE" "$NETWORK_FIXTURE"; do
   if test -f "$STATE_ROOT/.terraform.tfstate.lock.info" || \
     test "$(managed_resource_count "$STATE_ROOT")" != 0; then
     DESTROYS_COMPLETE=false
@@ -363,7 +376,7 @@ fi
 After every destroy succeeds, require every managed state and lock to be gone, then wait up to 15 minutes for exact run-owned ASGs and active instances. The OpenVPN instance check requires `Module=openvpn` and an exact run Name as a conjunction.
 
 ```bash
-for STATE_ROOT in "$FOUNDATION" "$ADDONS" "$VPN_FIXTURE" "$NETWORK_FIXTURE"; do
+for STATE_ROOT in "$FOUNDATION" "$ADDONS" "$BOOTSTRAP_FIXTURE" "$VPN_FIXTURE" "$NETWORK_FIXTURE"; do
   test ! -f "$STATE_ROOT/.terraform.tfstate.lock.info"
   test "$(managed_resource_count "$STATE_ROOT")" = 0
 done

@@ -41,11 +41,27 @@ func TestCompleteStack(t *testing.T) {
 
 	root := repositoryRoot(t)
 	name := testName("unrealops-e2e")
+	bootstrapName := testName("unrealops-bootstrap")
+	bootstrap := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
+		TerraformDir:    filepath.Join(root, "terraform/tests/fixtures/account-bootstrap"),
+		TerraformBinary: terraformBinary(),
+		NoColor:         true,
+		Vars: map[string]interface{}{
+			"name":         bootstrapName,
+			"region":       region,
+			"cluster_name": name,
+		},
+	})
+	defer terraform.Destroy(t, bootstrap)
+	terraform.InitAndApply(t, bootstrap)
+	adminRoleARN := terraform.Output(t, bootstrap, "role_arn")
+
 	foundationDir := filepath.Join(root, "terraform/examples/complete/foundation")
 	foundationVariables := map[string]interface{}{
 		"aws_region":                 region,
 		"name":                       name,
 		"openvpn_runtime_secret_arn": secretARN,
+		"admin_principal_arns":       []string{adminRoleARN},
 	}
 	if lore != nil {
 		foundationVariables["enable_lore"] = true
@@ -94,6 +110,7 @@ func TestCompleteStack(t *testing.T) {
 		expectedAMIRelease,
 		deployedAddonVersions,
 	)
+	assertEKSAdministratorAccessEntry(t, region, name, adminRoleARN)
 
 	clusterEndpoint := terraform.Output(t, foundation, "cluster_endpoint")
 	parsedEndpoint, err := url.Parse(clusterEndpoint)
@@ -134,11 +151,67 @@ func TestCompleteStack(t *testing.T) {
 	require.Regexp(t, `^[0-9]+\.[0-9]+\.[0-9]+$`, terraform.Output(t, addons, "karpenter_version"))
 
 	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
-	runCommand(t, nil, "aws", "eks", "update-kubeconfig", "--region", region, "--name", terraform.Output(t, foundation, "cluster_name"), "--kubeconfig", kubeconfig)
+	runCommand(
+		t,
+		nil,
+		"aws",
+		"eks",
+		"update-kubeconfig",
+		"--region",
+		region,
+		"--name",
+		terraform.Output(t, foundation, "cluster_name"),
+		"--role-arn",
+		adminRoleARN,
+		"--kubeconfig",
+		kubeconfig,
+	)
+	require.Eventually(t, func() bool {
+		output, canIErr := runCommandE(
+			context.Background(),
+			nil,
+			"kubectl",
+			"--kubeconfig",
+			kubeconfig,
+			"auth",
+			"can-i",
+			"*",
+			"*",
+			"--all-namespaces",
+		)
+		return canIErr == nil && strings.TrimSpace(output) == "yes"
+	}, 2*time.Minute, 5*time.Second, "bootstrapped role did not receive EKS cluster-administrator access")
 	testKarpenterProvisioningAndConsolidation(t, kubeconfig)
 	if lore != nil {
 		testLoreAcceptance(t, region, name, kubeconfig, lore, foundation, addons)
 	}
+}
+
+func assertEKSAdministratorAccessEntry(t *testing.T, region, clusterName, principalARN string) {
+	t.Helper()
+	sess, err := session.NewSession(&aws.Config{Region: aws.String(region)})
+	require.NoError(t, err)
+	client := eks.New(sess)
+
+	entry, err := client.DescribeAccessEntryWithContext(context.Background(), &eks.DescribeAccessEntryInput{
+		ClusterName:  aws.String(clusterName),
+		PrincipalArn: aws.String(principalARN),
+	})
+	require.NoError(t, err)
+	require.Equal(t, principalARN, aws.StringValue(entry.AccessEntry.PrincipalArn))
+
+	policies, err := client.ListAssociatedAccessPoliciesWithContext(context.Background(), &eks.ListAssociatedAccessPoliciesInput{
+		ClusterName:  aws.String(clusterName),
+		PrincipalArn: aws.String(principalARN),
+	})
+	require.NoError(t, err)
+	require.Len(t, policies.AssociatedAccessPolicies, 1)
+	require.Equal(
+		t,
+		"arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy",
+		aws.StringValue(policies.AssociatedAccessPolicies[0].PolicyArn),
+	)
+	require.Equal(t, eks.AccessScopeTypeCluster, aws.StringValue(policies.AssociatedAccessPolicies[0].AccessScope.Type))
 }
 
 func assertEKSFoundation(t *testing.T, region, clusterName, expectedClusterVersion, expectedAMIRelease string, expectedAddons map[string]string) {

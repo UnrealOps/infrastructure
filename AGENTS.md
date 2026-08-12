@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-The supported vertical slice lives in `terraform/modules/`: `network`, `openvpn`, `eks`, `karpenter-infra`, and `cluster-addons`. Apply `terraform/examples/complete/foundation`, connect through OpenVPN, then apply `terraform/examples/complete/addons` with the same cluster name. Add-ons discover the cluster and Karpenter prerequisites from AWS; never use `terraform_remote_state`. Terratest suites and fixtures live in `terraform/tests/`; helpers belong in `scripts/`, and repo-level runbooks in `.agents/skills/`. Do not add game-service infrastructure without explicitly expanding scope.
+The supported vertical slice lives in `terraform/modules/`: `account-bootstrap`, `network`, `openvpn`, `eks`, `karpenter-infra`, and `cluster-addons`, with Lore as an opt-in extension. Apply `terraform/examples/account-bootstrap` once per account access boundary, pass its role output to `terraform/examples/complete/foundation`, connect through OpenVPN, then apply `terraform/examples/complete/addons` with the same cluster name. Keep bootstrap, foundation, and add-ons state independent. Add-ons discover the cluster and Karpenter prerequisites from AWS; never use `terraform_remote_state`. Terratest suites and fixtures live in `terraform/tests/`; helpers belong in `scripts/`, and repo-level runbooks in `.agents/skills/`. Do not add game-service infrastructure without explicitly expanding scope.
 
 ## Build, Test, and Development Commands
 
@@ -10,6 +10,7 @@ The supported vertical slice lives in `terraform/modules/`: `network`, `openvpn`
 - `make check` runs formatting, initialization/validation, linting, and non-live Go tests.
 - `make validate ENGINE=tofu` validates every supported module and example; use `ENGINE=terraform` for compatibility checks.
 - `make security` fails on high or critical IaC misconfigurations in supported roots.
+- `make account-bootstrap-init ENGINE=tofu` initializes the standalone durable EKS administrator identity root.
 - Use `$test-unrealops-infrastructure` for billable acceptance tests; its wrapper requires an explicit account, region, run ID, and cost confirmation, then audits cleanup.
 - `make vpn-pki-init ENV=dev AWS_REGION=us-west-2` creates the offline CA and uploads only OpenVPN runtime material.
 

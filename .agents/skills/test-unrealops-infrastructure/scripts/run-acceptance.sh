@@ -107,6 +107,7 @@ work_dir="${work_dir:-${TMPDIR:-/tmp}/unrealops-acceptance-${run_id}}"
 state_roots=(
 	terraform/examples/complete/foundation
 	terraform/examples/complete/addons
+	terraform/tests/fixtures/account-bootstrap
 	terraform/tests/fixtures/openvpn
 	terraform/tests/fixtures/network
 )
@@ -199,9 +200,10 @@ assert_account_scope() {
 assert_account_scope || die "unable to verify the explicitly supplied AWS account"
 
 e2e_name="unrealops-e2e-$run_id"
+bootstrap_name="unrealops-bootstrap-$run_id"
 network_name="unrealops-network-$run_id"
 vpn_name="unrealops-vpn-$run_id"
-for selector in "Environment=$e2e_name" "Test=$network_name" "Test=$vpn_name" \
+for selector in "Environment=$e2e_name" "Test=$bootstrap_name" "Test=$network_name" "Test=$vpn_name" \
 	"ClusterName=$e2e_name" "karpenter.sh/discovery=$e2e_name"; do
 	key="${selector%%=*}"
 	value="${selector#*=}"
@@ -209,6 +211,13 @@ for selector in "Environment=$e2e_name" "Test=$network_name" "Test=$vpn_name" \
 		--tag-filters "Key=$key,Values=$value" --query 'length(ResourceTagMappingList)' --output text)"
 	[[ "$owned_count" == "0" ]] || die "run ID is not fresh; AWS still returns $owned_count resources for $selector"
 done
+
+if bootstrap_lookup="$(aws iam get-role --role-name "$bootstrap_name" --output json 2>&1)"; then
+  die "run ID is not fresh; exact account-bootstrap IAM role remains: $bootstrap_name"
+elif [[ "$bootstrap_lookup" != *NoSuchEntity* ]]; then
+  printf '%s\n' "$bootstrap_lookup" >&2
+  die "could not verify that account-bootstrap IAM role $bootstrap_name is absent"
+fi
 
 # Provider default tags are not guaranteed to propagate through every
 # launch-template-created OpenVPN resource. Refuse exact module ownership too,
@@ -614,7 +623,7 @@ fi
 jq -n \
 	--arg account_id "$account_id" --arg region "$region" --arg engine "$engine" --arg run_id "$run_id" \
 	--arg pki_root "$OPENVPN_PKI_ROOT" --arg e2e_name "$e2e_name" \
-	--arg network_name "$network_name" --arg vpn_name "$vpn_name" \
+	--arg bootstrap_name "$bootstrap_name" --arg network_name "$network_name" --arg vpn_name "$vpn_name" \
 	--arg secret_name "$secret_name" --arg complete_secret_name "$complete_secret_name" \
 	--arg secret_arn "$reserved_secret_arn" --arg complete_secret_arn "$reserved_complete_secret_arn" \
 	--arg lore_secret_name "$lore_secret_name" --arg lore_secret_arn "$reserved_lore_secret_arn" \
@@ -625,7 +634,7 @@ jq -n \
     engine:$engine,
     run_id:$run_id,
     pki_root:$pki_root,
-    names:{e2e:$e2e_name,network:$network_name,openvpn:$vpn_name},
+    names:{e2e:$e2e_name,bootstrap:$bootstrap_name,network:$network_name,openvpn:$vpn_name},
     secret_names:{openvpn:$secret_name,complete:$complete_secret_name,lore:$lore_secret_name},
     secret_arn:$secret_arn,
     complete_secret_arn:$complete_secret_arn,

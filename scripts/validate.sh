@@ -7,6 +7,7 @@ export TF_PLUGIN_CACHE_DIR="${TF_PLUGIN_CACHE_DIR:-$root_dir/.terraform-plugin-c
 mkdir -p "$TF_PLUGIN_CACHE_DIR"
 
 directories=(
+	terraform/modules/account-bootstrap
 	terraform/modules/network
 	terraform/modules/openvpn
 	terraform/modules/eks
@@ -15,6 +16,7 @@ directories=(
 	terraform/modules/cluster-addons
 	terraform/modules/lore-infra
 	terraform/modules/lore-workload
+	terraform/examples/account-bootstrap
 	terraform/examples/complete/foundation
 	terraform/examples/complete/addons
 )

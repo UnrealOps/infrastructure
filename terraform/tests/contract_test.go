@@ -15,6 +15,7 @@ import (
 func TestSupportedModuleLayout(t *testing.T) {
 	root := repositoryRoot(t)
 	for _, relativePath := range []string{
+		"terraform/modules/account-bootstrap",
 		"terraform/modules/network",
 		"terraform/modules/openvpn",
 		"terraform/modules/eks",
@@ -23,6 +24,7 @@ func TestSupportedModuleLayout(t *testing.T) {
 		"terraform/modules/cluster-addons",
 		"terraform/modules/lore-infra",
 		"terraform/modules/lore-workload",
+		"terraform/examples/account-bootstrap",
 		"terraform/examples/complete/foundation",
 		"terraform/examples/complete/addons",
 	} {
@@ -37,10 +39,16 @@ func TestSupportedModuleLayout(t *testing.T) {
 	}
 }
 
-func TestLoreModulesDoNotConfigureProvidersOrBackends(t *testing.T) {
+func TestModulesDoNotConfigureProvidersOrBackends(t *testing.T) {
 	root := repositoryRoot(t)
 	for _, relativePath := range []string{
+		"terraform/modules/account-bootstrap",
+		"terraform/modules/network",
+		"terraform/modules/openvpn",
+		"terraform/modules/eks",
+		"terraform/modules/karpenter-infra",
 		"terraform/modules/cluster-addons-infra",
+		"terraform/modules/cluster-addons",
 		"terraform/modules/lore-infra",
 		"terraform/modules/lore-workload",
 	} {
@@ -60,6 +68,37 @@ func TestLoreModulesDoNotConfigureProvidersOrBackends(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestAccountBootstrapUsesPermanentLeastPrivilegeEKSIdentity(t *testing.T) {
+	root := repositoryRoot(t)
+	moduleMain := filepath.Join(root, "terraform/modules/account-bootstrap/main.tf")
+	moduleVariables := filepath.Join(root, "terraform/modules/account-bootstrap/variables.tf")
+	moduleOutputs := filepath.Join(root, "terraform/modules/account-bootstrap/outputs.tf")
+	exampleMain := filepath.Join(root, "terraform/examples/account-bootstrap/main.tf")
+	foundationVariables := filepath.Join(root, "terraform/examples/complete/foundation/variables.tf")
+
+	for _, expected := range []string{
+		`actions = ["sts:AssumeRole"]`,
+		`identifiers = sort(tolist(var.trusted_principal_arns))`,
+		`actions   = ["eks:ListClusters"]`,
+		`actions   = ["eks:DescribeCluster"]`,
+		`:cluster/${name}"`,
+	} {
+		assertFileContains(t, moduleMain, expected)
+	}
+
+	for _, expected := range []string{
+		`:(role|user)/`,
+		`wildcards and STS session ARNs are not allowed`,
+	} {
+		assertFileContains(t, moduleVariables, expected)
+	}
+
+	assertFileContains(t, moduleOutputs, `value       = toset([aws_iam_role.this.arn])`)
+	assertFileContains(t, exampleMain, `data "aws_iam_session_context" "current"`)
+	assertFileContains(t, exampleMain, `data.aws_iam_session_context.current.issuer_arn`)
+	assertFileContains(t, foundationVariables, `admin_principal_arns must contain only exact, permanent IAM role or user ARNs`)
 }
 
 func TestLegacyEKSModuleTreesAreAbsent(t *testing.T) {
@@ -175,6 +214,22 @@ func TestBackendHelperAcceptsOnlyEmptyLineagelessState(t *testing.T) {
 		`(.outputs | type == "object" and length == 0)`,
 		`[.resources[]? | select(.mode == "managed")] | length) == 0`,
 		`state lacks a lineage but is not an empty new state`,
+	} {
+		assertFileContains(t, helper, expected)
+	}
+}
+
+func TestBackendHelperSupportsIndependentAccountBootstrapState(t *testing.T) {
+	root := repositoryRoot(t)
+	helper := filepath.Join(root, ".agents/skills/deploy-unrealops-infrastructure/scripts/init-backend.sh")
+
+	for _, expected := range []string{
+		`account-bootstrap | foundation | addons`,
+		`root_relative="terraform/examples/account-bootstrap"`,
+		`non-empty account-bootstrap state lacks a durable IAM role ARN`,
+		`account-bootstrap state contains resources outside its IAM role boundary`,
+		`--peer-backend-config for every other root`,
+		`root and peer backend configs must select distinct S3 bucket/key pairs`,
 	} {
 		assertFileContains(t, helper, expected)
 	}
